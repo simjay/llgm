@@ -30,9 +30,12 @@ and uploaded the HTML artifact. Deployment was skipped. The first CI run exposed
 two test dependencies on the checkout import path and working directory. Both
 tests now resolve repository tooling and fixtures from their own file location.
 A clean installed-wheel run outside the checkout passed 1,022 tests and 245
-subtests, with 56 optional checks skipped. GitHub validation of these repairs is
-pending. Read the Docs is not connected. Its Community service needs a public
-repository, while the current private repository requires Business hosting.
+subtests, with 56 optional checks skipped. At `6b3a736`,
+[GitHub CI passed](https://github.com/simjay/llgm/actions/runs/34659461095)
+on Python 3.11 through 3.14, including distribution, SDK contract, coverage and
+documentation jobs. The separate documentation workflow also passed, with
+deployment skipped. Read the Docs is not connected. Its Community service needs
+a public repository, while the current private repository requires Business hosting.
 
 | Resource | Last observed state |
 | --- | --- |

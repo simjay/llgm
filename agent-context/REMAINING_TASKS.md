@@ -297,8 +297,10 @@ is private. Automatic approval review rejected enabling public Pages without
 explicit approval for `https://simjay.github.io/llgm/`. Push and build are
 authorized. Publication awaits that approval. The package remains unpublished.
 
-**Next step:** Validate CI on the declared Python versions. After explicit
-publication approval, enable Actions as the repository's Pages source, set the
+GitHub CI passed on Python 3.11 through 3.14 at `6b3a736`, including distribution,
+coverage and documentation checks. The separate site build also passed.
+
+**Next step:** After explicit publication approval, enable Actions as the repository's Pages source, set the
 publishing variable, run the workflow, and verify the public site. Connecting
 the repository to Read the Docs is an alternative hosting route and requires
 Business hosting while the repository is private. Before a PyPI release,
