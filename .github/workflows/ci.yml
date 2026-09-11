@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install the core distribution
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . 'pytest>=8,<10'
+          python -m pip check
+      - name: Test the installed package outside the checkout
+        working-directory: ${{ runner.temp }}
+        env:
+          VERIFY_LLGM_WHEEL: "1"
+        run: python -I -m pytest "$GITHUB_WORKSPACE/tests" --import-mode=importlib -q
+
+  hosted-adapters:
+    name: Hosted SDK contracts / no API calls
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install native provider extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install '.[openai,anthropic]' 'pytest>=8,<10'
+          python -m pip check
+      - name: Test fake SDK payloads and installed signatures
+        working-directory: ${{ runner.temp }}
+        env:
+          VERIFY_LLGM_WHEEL: "1"
+        run: >-
+          python -I -m pytest
+          "$GITHUB_WORKSPACE/tests/test_models.py"
+          "$GITHUB_WORKSPACE/tests/test_runtime.py"
+          "$GITHUB_WORKSPACE/tests/test_packaging.py"
+          --import-mode=importlib -q
+
+  artifacts:
+    name: Lint, wheel, and source distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install build and validation tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --group dev
+      - name: Lint and build both distribution formats
+        run: |
+          python tools/check_docstrings.py
+          make lint PYTHON=python
+          python -m build --outdir dist
+          python -m twine check dist/*
+      - name: Install wheel in a fresh environment
+        run: |
+          python -m venv "$RUNNER_TEMP/llgm-wheel-env"
+          "$RUNNER_TEMP/llgm-wheel-env/bin/python" -m pip install 'pytest>=8,<10' "$GITHUB_WORKSPACE"/dist/*.whl
+          "$RUNNER_TEMP/llgm-wheel-env/bin/python" -m pip check
+      - name: Test the wheel outside the checkout
+        working-directory: ${{ runner.temp }}
+        env:
+          VERIFY_LLGM_WHEEL: "1"
+        run: >-
+          "$RUNNER_TEMP/llgm-wheel-env/bin/python" -I -m pytest
+          "$GITHUB_WORKSPACE/tests" --import-mode=importlib -q
+      - name: Build and install from the source archive in a fresh environment
+        run: |
+          python -m venv "$RUNNER_TEMP/llgm-sdist-env"
+          "$RUNNER_TEMP/llgm-sdist-env/bin/python" -m pip install 'pytest>=8,<10' "$GITHUB_WORKSPACE"/dist/*.tar.gz
+          "$RUNNER_TEMP/llgm-sdist-env/bin/python" -m pip check
+      - name: Test the installed source distribution outside the checkout
+        working-directory: ${{ runner.temp }}
+        env:
+          VERIFY_LLGM_WHEEL: "1"
+        run: >-
+          "$RUNNER_TEMP/llgm-sdist-env/bin/python" -I -m pytest
+          "$GITHUB_WORKSPACE/tests" --import-mode=importlib -q
+
+  coverage:
+    name: Deterministic line and branch coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install core tests and hosted SDK contract dependencies
+        run: >-
+          python -m pip install '.[openai,anthropic]'
+          'pytest>=8,<10' 'coverage>=7.10,<8'
+      - name: Measure deterministic contracts without dataset or live calls
+        run: python -m coverage run -m pytest -m 'not integration' -q
+      - name: Produce coverage reports
+        if: always()
+        run: |
+          python -m coverage report
+          python -m coverage json
+          python -m coverage xml
+          python -m coverage html
+      - name: Retain coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage
+          path: runs/coverage/unit/
+          if-no-files-found: warn
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install the package and documentation tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --group docs .
+      - name: Build Sphinx and MyST documentation with warnings as errors
+        run: make docs PYTHON=python DOCS_BUILD_DIR="$RUNNER_TEMP/llgm-docs"

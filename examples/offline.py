@@ -1,0 +1,138 @@
+"""Run the full LLGM node pipeline with real Docker and scripted models, without API calls.
+
+Requires a running Docker daemon and the configured local Python image. This
+script never pulls an image. It creates and removes only a temporary workspace.
+"""
+
+import asyncio
+import json
+from tempfile import TemporaryDirectory
+
+from llgm import LLGM, Budget, Conversation, MaintenancePolicy, Provenance, SourceSpan, Workspace
+from llgm.core.time import parse_instant_ms
+from llgm.models import CallableModelClient, ModelResponse
+
+
+async def node_response(request):
+    """Script local Python inspection and child return while deriving findings from observations."""
+    if len(request.messages) == 2:
+        code = """import json
+page = source_info()
+records = []
+while True:
+    for turn in page["turns"]:
+        records.extend(read(turn["reference"])["evidence"])
+    if page["next_offset"] is None:
+        break
+    page = source_info(offset=page["next_offset"])
+findings = [record["text"] for record in records]
+citations = [record["id"] for record in records if record["text"]]
+unresolved = [gap for record in records for gap in record["metadata"].get("unresolved", [])]
+for neighbor in edges()["references"]:
+    child = query_node(neighbor["node_id"], context["question"])
+    findings.append(" " + child["answer"])
+    citations.extend(record["id"] for record in child["evidence"])
+    unresolved.extend(child["unresolved"])
+print(json.dumps({"answer": "".join(findings), "citations": citations, "unresolved": unresolved}))"""
+        operation = {"op": "python", "code": code}
+    else:
+        observation = json.loads(request.messages[-1].content)
+        if observation["error"] or observation["stdout_truncated"]:
+            raise RuntimeError(f"Scripted node inspection failed: {observation}")
+        operation = {"op": "finish", **json.loads(observation["stdout"])}
+    return ModelResponse(json.dumps(operation))
+
+
+async def root_response(request):
+    """Combine actual branch findings and their returned citation IDs in one final call."""
+    payload = json.loads(request.messages[-1].content)
+    operation = {
+        "op": "finish",
+        "answer": " ".join(branch["findings"] for branch in payload["branches"]),
+        "citations": [record["id"] for record in payload["evidence"]],
+        "unresolved": [gap for branch in payload["branches"] for gap in branch["unresolved"]],
+    }
+    return ModelResponse(json.dumps(operation))
+
+
+async def main():
+    """Retrieve two seeds, follow a primary edge, apply a scoped patch, and synthesize."""
+    with TemporaryDirectory(prefix="llgm-example-") as directory:
+        async with Workspace.open(directory) as workspace:
+            memory = LLGM(
+                workspace,
+                CallableModelClient(root_response),
+                CallableModelClient(node_response),
+                maintenance_policy=MaintenancePolicy(mode="disabled"),
+                max_seed_nodes=2,
+                max_concurrency=2,
+                inference_budget=Budget(
+                    max_model_calls=12,
+                    max_sidecar_calls=10,
+                    max_searches=4,
+                    max_evidence_tokens=131072,
+                    max_bundle_tokens=32768,
+                    max_context_tokens=131072,
+                    max_output_tokens=2048,
+                    timeout_seconds=120,
+                ),
+            )
+            sources = {}
+            texts = {
+                "database": "Atlas production database uses PostgreSQL. Staging uses SQLite.",
+                "backups": "Atlas production backups are retained for seven days.",
+                "registry": "The deployment registry says eu-west-1.",
+                "update": "MySQL",
+            }
+            for label, text in texts.items():
+                outcome = await memory.ingest(
+                    Conversation.from_turns(
+                        [{"role": "user", "turn_id": "note", "text": text}],
+                    )
+                )
+                sources[label] = outcome.source.node_id
+            await workspace.publish_edge(
+                sources["database"],
+                sources["registry"],
+                relation="deployment_registry",
+                provenance=Provenance("user", "offline-example"),
+            )
+            start = texts["database"].index("PostgreSQL")
+            old = SourceSpan(sources["database"], "note", start, start + len("PostgreSQL"))
+            replacement = SourceSpan(sources["update"], "note", 0, len(texts["update"]))
+            await workspace.append_journal(
+                sources["database"],
+                subject=old,
+                record_kind="overwrite",
+                relation="replace",
+                value=replacement,
+                provenance=Provenance("user", "offline-example", (replacement,)),
+                applicability={"scope": {"env": "production"}},
+            )
+            result = await memory.answer(
+                "Atlas production database, backups, and region",
+                scope={"env": "production"},
+                as_of_ms=parse_instant_ms("2026-09-11T00:00:00Z"),
+            )
+            assert result.status == "completed", result.evidence.unresolved
+            assert all(
+                value in result.answer for value in ("MySQL", "SQLite", "seven days", "eu-west-1")
+            ), result.answer
+            assert "PostgreSQL" not in result.answer
+            assert (await workspace.resolve(old)).text == "PostgreSQL"
+            selected = next(event for event in result.trace if event["kind"] == "seed_selection")
+            assert set(selected["selected"]) == {sources["database"], sources["backups"]}
+            assert any(
+                event["kind"] == "enter"
+                and event["depth"] == 1
+                and event["target_node_id"] == sources["registry"]
+                for event in result.trace
+            )
+            assert sum(event["kind"] == "root_return" for event in result.trace) == 1
+            print(result.answer)
+            print("Two retrieved seeds, one recursive descendant, one final root call.")
+            print("Replacement citations are canonical. The original source remains readable.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

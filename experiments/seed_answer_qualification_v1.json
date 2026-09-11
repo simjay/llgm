@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "experiment_id": "seed-answer-qualification-v1-2026-09-11",
+  "frozen_date": "2026-09-11",
+  "base_protocol": {
+    "path": "experiments/seed_answers_v1.json",
+    "sha256": "7a45f891877440357e4f584013ad4f978601b4e9c7923f92bf355989cdfc9dc6"
+  },
+  "parent_run": {
+    "path": "runs/seed-answers-20260911/live-a/seed-answers.json",
+    "requires_completed": true,
+    "identity_policy": "Record SHA256 of the completed parent bytes during preparation and require the same bytes before execution."
+  },
+  "case_ids": [
+    "dad224aa",
+    "gpt4_731e37d7",
+    "cc539528",
+    "1da05512",
+    "21436231",
+    "gpt4_7f6b06db",
+    "ns-01",
+    "ns-03"
+  ],
+  "pool_id": "bm25_40",
+  "policy": "first_owner",
+  "answer_repetitions": 1,
+  "sidecar_model": "gpt-4.1-2025-04-14",
+  "limits": {
+    "generation_cost_cap_usd": 2.0,
+    "judge_cost_cap_usd": 0.5,
+    "combined_parent_and_qualification_cap_usd": 20.0,
+    "run_timeout_seconds": 3600
+  },
+  "selection_policy": "Posthoc runtime qualification following failures in the parent run: first question from each of its six LongMemEval strata plus ns-01 and ns-03. Fixed BM25 first-owner seeds and exact source handles; no choice based on qualification outcomes.",
+  "intervention": "The only per-answer model/configuration intervention changes the delegate from GPT4.1mini to full GPT4.1. Root, judge, prompts, temperature 0, per-answer budget, runtime limits, source histories and seed handles stay identical to the parent. The sidecar uses the parent's full GPT4.1 token pricing.",
+  "execution_policy": "Eight cases in the declared order, one at a time, one answer and two post-answer judgments per case. No retries, prompt changes, replacement answers or fallback seeds. Retain every failure and missing judgment.",
+  "measurement_policy": "Report all eight outcomes and counts of actual source-read callbacks, branches returning cited evidence and final canonical citations. Answer correctness and support are separate from interface competence because BM25 seeds may miss needed facts. No success threshold or statistical qualification guarantee is introduced after outcomes.",
+  "scheduling_policy": "The parent runs two cases concurrently; this probe runs cases sequentially. Per-answer limits and branch concurrency remain the same, but these results do not isolate a latency or scheduling effect.",
+  "cost_policy": "Require a completed parent with no in-flight calls or usage-bound breaches; tolerate only floating-point pending residue within 1e-9 USD. Reconcile known call costs, every unknown call's full reservation and unknown-call counts with the parent allowances. Require parent known cost plus unresolved reservations and pending residue plus this qualification's complete $2.50 allowance to fit the combined $20. Unknown actual cost and combined total estimates remain null; report known subtotals and conservative admission liability separately. Do not retry paid calls. These are local token estimates and reservations, not provider invoice limits.",
+  "claims": "A small exposed posthoc qualification of the recursive node interface. This does not compare selector policies, isolate general model capability, establish benchmark superiority or create an independent holdout. Preserve the parent negative run and report these results separately."
+}

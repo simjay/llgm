@@ -1,0 +1,52 @@
+name: LongMemEval integration sanity
+
+# Real corpus validation is explicit because the pinned release is 277 MB.
+# This workflow makes no hosted model calls and needs no model API secrets.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install library and test runner
+        run: python -m pip install . 'pytest>=8,<10' 'coverage>=7.10,<8'
+      - name: Download and verify the pinned public dataset
+        run: >-
+          llgm experiment download
+          --output data/longmemeval/longmemeval_s_cleaned.json
+          --dataset-revision 98d7416c24c778c2fee6e6f3006e7a073259d48f
+          --sha256 d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442
+      - name: Exercise real corpus persistence and retrieval
+        env:
+          LLGM_TEST_LONGMEMEVAL_PATH: data/longmemeval/longmemeval_s_cleaned.json
+          COVERAGE_FILE: runs/coverage/local-data/.coverage
+        run: python -m coverage run -m pytest tests/integration/test_longmemeval_local.py -q
+      - name: Report local dataset integration coverage separately
+        if: always()
+        env:
+          COVERAGE_FILE: runs/coverage/local-data/.coverage
+        run: |
+          python -m coverage report
+          python -m coverage json -o runs/coverage/local-data/coverage.json
+          python -m coverage xml -o runs/coverage/local-data/coverage.xml
+          python -m coverage html -d runs/coverage/local-data/html
+      - name: Retain metadata and diagnostic coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: longmemeval-sanity
+          path: |
+            runs/integration/
+            runs/coverage/local-data/
+          if-no-files-found: warn

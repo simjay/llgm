@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-labelledby="title" color="#16333b">
+  <title id="title">LLGM — Branch concept</title>
+  <g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M24 24V62Q24 76 38 76H76"/>
+    <path d="M24 50H40Q52 50 52 38V24"/>
+  </g>
+  <g fill="currentColor"><circle cx="24" cy="24" r="6"/><circle cx="52" cy="24" r="6"/><circle cx="76" cy="76" r="7"/></g>
+</svg>

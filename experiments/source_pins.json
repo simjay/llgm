@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "longmemeval_s": {
+    "dataset": "xiaowu0162/longmemeval-cleaned",
+    "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+    "file": "longmemeval_s_cleaned.json",
+    "url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/98d7416c24c778c2fee6e6f3006e7a073259d48f/longmemeval_s_cleaned.json",
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "bytes": 277383467
+  },
+  "colbert_tokenizer": {
+    "repository": "colbert-ir/colbertv2.0",
+    "revision": "c1e84128e85ef755c096a95bdb06b47793b13acf",
+    "files": {
+      "config.json": {
+        "sha256": "cbdcc01dc7772fd0e5e1d85d5de695faf8c4935ae3c7ea3fdb6c24397b284f3c",
+        "bytes": 743
+      },
+      "tokenizer.json": {
+        "sha256": "5fd1c882abbd30517dced455a2c9768945ec726b96727927e4959348d9de550b",
+        "bytes": 466081
+      },
+      "tokenizer_config.json": {
+        "sha256": "a16a31c8d474339d7a46afe7eb8583b24f8b74806af6e25294506523f9d0acfb",
+        "bytes": 405
+      },
+      "special_tokens_map.json": {
+        "sha256": "303df45a03609e4ead04bc3dc1536d0ab19b5358db685b6f3da123d05ec200e3",
+        "bytes": 112
+      },
+      "vocab.txt": {
+        "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3",
+        "bytes": 231508
+      }
+    },
+    "weights_downloaded": false
+  },
+  "format_audit": {
+    "benchmark_cases": 500,
+    "shared_history_components": 1,
+    "cases_with_repeated_session_ids": 13,
+    "max_question_colbert_tokens": 69,
+    "questions_over_32_colbert_tokens": 61,
+    "configured_query_maxlen": 128
+  },
+  "tokenizer_digest": "3504c802a5242208f76e39b65e4f522130ea66b2777d09d3355eca5307c53ec0"
+}

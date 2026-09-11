@@ -1,0 +1,11 @@
+/* Wrap comparison prose while retaining the theme's horizontal table fallback. */
+.wy-table-responsive table td,
+.wy-table-responsive table th {
+    white-space: normal;
+}
+
+/* Give the SVG wordmark an explicit width instead of the theme's auto sizing. */
+.wy-side-nav-search > a img.logo {
+    width: 220px;
+    height: auto;
+}

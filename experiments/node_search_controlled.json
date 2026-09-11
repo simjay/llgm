@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "origin": "controlled synthetic development histories; authored before retrieval",
+  "seed": 20260911,
+  "source_count_per_history": 96,
+  "isolation": "disjoint node IDs and exact source text; shared generation style is not population independence",
+  "scope": "retrieval and direct seed admission only; no answer quality or benchmark generalization claim",
+  "cases": [
+    {
+      "case_id": "ns-01",
+      "ability": "paraphrase",
+      "source_count": 96,
+      "turn_count": 284,
+      "word_count": 27143,
+      "required_node_count": 1,
+      "case_sha256": "7df7b293fed46eb74e97a837a0b1fa438d3172fef4da4857383c380e11a58ba8",
+      "gold_sha256": "aec036974ff7f9142e4146029934e5e146ac3381589c836601938fd5999481a4"
+    },
+    {
+      "case_id": "ns-02",
+      "ability": "paraphrase",
+      "source_count": 96,
+      "turn_count": 284,
+      "word_count": 27206,
+      "required_node_count": 1,
+      "case_sha256": "cdc8b6f9a2f9c53c0268f5a2d3c1efa103514814ca799b55e2c42669693d0a1e",
+      "gold_sha256": "6d80259e1db894442a4494b3a04a78d71f8ec81481caacb57e5766c17605817a"
+    },
+    {
+      "case_id": "ns-03",
+      "ability": "crowding",
+      "source_count": 96,
+      "turn_count": 309,
+      "word_count": 30185,
+      "required_node_count": 2,
+      "case_sha256": "8b37d3e229a4e46988ac420327213dbe6cf45f73a7eb32a0513141077e905982",
+      "gold_sha256": "302efa45856c749bd0081ee22663960d15ff0659bb36199a0d36d4c33bb15bba"
+    },
+    {
+      "case_id": "ns-04",
+      "ability": "crowding",
+      "source_count": 96,
+      "turn_count": 309,
+      "word_count": 30149,
+      "required_node_count": 2,
+      "case_sha256": "35f5625120f874f1912b10fd23c968739a8357e07ff5aa023b670865065d14c9",
+      "gold_sha256": "324e2e8366340fd8a2fccc91e96a1591a508e9176ee7d8f2f0837c8cecb855f2"
+    },
+    {
+      "case_id": "ns-05",
+      "ability": "scope_multi_source",
+      "source_count": 96,
+      "turn_count": 278,
+      "word_count": 26583,
+      "required_node_count": 2,
+      "case_sha256": "93c874f047fdb49553dc36f26243298a3c9db0bad9bab16c5e7f2c57c160b4aa",
+      "gold_sha256": "ac70edbe3437210f51d3e254d47cabbf61c8756a27725de48a44c98afd6c36c5"
+    },
+    {
+      "case_id": "ns-06",
+      "ability": "scope_multi_source",
+      "source_count": 96,
+      "turn_count": 278,
+      "word_count": 26509,
+      "required_node_count": 3,
+      "case_sha256": "919050d9b04f6ea72343a485c6f0a6892e267885bb0fb56763cf8024135af6fb",
+      "gold_sha256": "26c997f2023387e5795daa1226e76eb6f90874aa3037237f477f8a11af2512ac"
+    },
+    {
+      "case_id": "ns-07",
+      "ability": "capacity",
+      "source_count": 96,
+      "turn_count": 280,
+      "word_count": 26814,
+      "required_node_count": 4,
+      "case_sha256": "6a94d854c56e73c265f2927ad645a40baf235ba236fa0a2a43cd666421c8decd",
+      "gold_sha256": "b862da53bf61eefbabd9a60964d115320e46007fd924f1ff47d7f9bc3e2ff13d"
+    },
+    {
+      "case_id": "ns-08",
+      "ability": "abstention",
+      "source_count": 96,
+      "turn_count": 284,
+      "word_count": 27462,
+      "required_node_count": 0,
+      "case_sha256": "58543dd7c29074661d0c338c4145ca6f1380a0fc55f6df640bf653f1b776a07c",
+      "gold_sha256": "acadaaf7cdd438d81332d938f6da41ff1ca893b4840ecd709ef1d46121da0f76"
+    }
+  ]
+}

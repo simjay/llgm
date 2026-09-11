@@ -1,0 +1,17 @@
+# Reference GPU job dependencies. ColBERT itself is installed from its pinned Git commit.
+modal==1.5.5
+torch==2.5.1
+transformers==4.45.2
+faiss-cpu==1.8.0.post1
+numpy==1.26.4
+scipy==1.14.1
+datasets==2.21.0
+huggingface-hub==0.25.2
+bitarray==2.9.2
+flask==3.0.3
+GitPython==3.1.43
+python-dotenv==1.0.1
+ninja==1.11.1.1
+tqdm==4.66.5
+ujson==5.10.0
+pytest==8.3.3

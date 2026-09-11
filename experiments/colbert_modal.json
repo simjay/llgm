@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "repository": {
+    "url": "https://github.com/stanford-futuredata/ColBERT",
+    "revision": "cc4f3dc91c0b45d2d08c251d9d95178285c65f1c"
+  },
+  "checkpoint": {
+    "repository": "colbert-ir/colbertv2.0",
+    "revision": "c1e84128e85ef755c096a95bdb06b47793b13acf",
+    "files": {
+      "config.json": {
+        "sha256": "cbdcc01dc7772fd0e5e1d85d5de695faf8c4935ae3c7ea3fdb6c24397b284f3c",
+        "bytes": 743
+      },
+      "tokenizer.json": {
+        "sha256": "5fd1c882abbd30517dced455a2c9768945ec726b96727927e4959348d9de550b",
+        "bytes": 466081
+      },
+      "tokenizer_config.json": {
+        "sha256": "a16a31c8d474339d7a46afe7eb8583b24f8b74806af6e25294506523f9d0acfb",
+        "bytes": 405
+      },
+      "special_tokens_map.json": {
+        "sha256": "303df45a03609e4ead04bc3dc1536d0ab19b5358db685b6f3da123d05ec200e3",
+        "bytes": 112
+      },
+      "vocab.txt": {
+        "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3",
+        "bytes": 231508
+      },
+      "model.safetensors": {
+        "sha256": "3f58890b1dfdfec066ef12ba431fa9d56992da9e30a53489242c4156e37e9017",
+        "bytes": 438349816
+      },
+      "artifact.metadata": {
+        "sha256": "0ddc5a54234cff6d13bc9411250a5479d9d96f3ffbace76d8a1884144377e434",
+        "bytes": 1633
+      }
+    },
+    "sha256": "482743edb1820fda2de676d3260032ec9f15970a110bd8e468c1c6506e3ab804"
+  },
+  "dataset": {
+    "dataset": "xiaowu0162/longmemeval-cleaned",
+    "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+    "file": "longmemeval_s_cleaned.json",
+    "url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/98d7416c24c778c2fee6e6f3006e7a073259d48f/longmemeval_s_cleaned.json",
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "bytes": 277383467
+  },
+  "cuda_image": "nvidia/cuda@sha256:da6791294b0b04d7e65d87b7451d6f2390b4d36225ab0701ee7dfec5769829f5",
+  "cuda_image_tag": "12.4.1-devel-ubuntu22.04",
+  "gpu": "A10",
+  "cpu": 4,
+  "memory_mib": 16384,
+  "configuration": {
+    "doc_maxlen": 180,
+    "query_maxlen": 128,
+    "nbits": 2,
+    "ncells": 2,
+    "centroid_score_threshold": 0.45,
+    "ndocs": 1024,
+    "nranks": 1,
+    "gpus": 1,
+    "index_bsize": 64,
+    "kmeans_niters": 4
+  },
+  "sanity_case_id": "001be529",
+  "benchmark_case_ids": [
+    "001be529",
+    "01493427",
+    "00ca467f"
+  ],
+  "benchmark_repeats": 5,
+  "interpretation": "Known diagnostic LongMemEval cases. No held-out quality or broad scalability claim. GPU encoder/search and CPU FAISS centroid training."
+}

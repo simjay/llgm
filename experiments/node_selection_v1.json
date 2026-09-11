@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "experiment_id": "node-selection-v1-2026-09-11",
+  "frozen_date": "2026-09-11",
+  "inputs": {
+    "dataset": {
+      "path": "data/longmemeval/longmemeval_s_cleaned.json",
+      "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
+    },
+    "benchmark_retrieval": {
+      "path": "runs/colbert-modal/node-search-opaque-20260911-a/node-search.json",
+      "sha256": "2a157d56afa1cfbd27b9d9f2793857b6f7df22ee74a9415a75f4a36ce1e9d6d7"
+    },
+    "controlled_retrieval": {
+      "path": "runs/colbert-modal/node-search-20260911-a/node-search.json",
+      "sha256": "58590ad6d8ed2f60ee567a0aa4dfcf7a43169db43752f68886c6dd75f6641a6d"
+    },
+    "benchmark_protocol": {
+      "path": "experiments/node_search_opaque_v1.json",
+      "sha256": "ab93afec91a37174c7de6a597fef5904492cb0858c75279308937c9c4fc657fe"
+    },
+    "controlled_manifest": {
+      "path": "experiments/node_search_controlled.json",
+      "sha256": "624ab3cf3a4d39b0a132374bb5483d16693349a6136e5738c9bf2d6dcac93e14"
+    }
+  },
+  "benchmark_case_ids": [
+    "dad224aa",
+    "184da446",
+    "72e3ee87",
+    "603deb26",
+    "gpt4_731e37d7",
+    "gpt4_372c3eed",
+    "2788b940",
+    "a4996e51",
+    "cc539528",
+    "65240037",
+    "e982271f",
+    "f523d9fe",
+    "1da05512",
+    "06f04340",
+    "0a34ad58",
+    "fca70973",
+    "21436231",
+    "6f9b354f",
+    "60d45044",
+    "545bd2b5",
+    "gpt4_7f6b06db",
+    "gpt4_59149c78",
+    "0bc8ad93",
+    "8c18457d"
+  ],
+  "controlled_case_ids": [
+    "ns-01",
+    "ns-02",
+    "ns-03",
+    "ns-04",
+    "ns-05",
+    "ns-06",
+    "ns-07",
+    "ns-08"
+  ],
+  "pools": [
+    "bm25_40",
+    "colbert_40",
+    "rrf_40"
+  ],
+  "retrieval_k": 40,
+  "rrf_constant": 60,
+  "max_seed_nodes": 3,
+  "repetitions": 3,
+  "model": {
+    "provider": "openai",
+    "model": "gpt-4.1-mini-2025-04-14",
+    "temperature": 0,
+    "max_output_tokens": 512,
+    "api_key_env": "OPENAI_API_KEY"
+  },
+  "pricing": {
+    "source": "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
+    "retrieved_date": "2026-09-11",
+    "usd_per_million_input_tokens": 0.4,
+    "usd_per_million_cached_input_tokens": 0.1,
+    "usd_per_million_output_tokens": 1.6,
+    "basis": "Standard synchronous API token estimate from provider usage, not invoice measurement"
+  },
+  "limits": {
+    "max_prompt_bytes": 100000,
+    "max_estimated_cost_usd": 10.0,
+    "max_failed_calls": 3,
+    "timeout_seconds_per_call": 60,
+    "run_timeout_seconds": 3600,
+    "concurrency": 1,
+    "sdk_retries": 0
+  },
+  "fusion_policy": "Union of actual B40 and C40, deduplicate exact canonical source spans, sum reciprocal ranks at constant60, retain40. Ties: minimum backend rank then canonical span tuple. Measure full union coverage separately.",
+  "context_policy": "Group all40 ranked hits by node, retaining every exact source span, role and date. Preserve original question/date. Reject oversize prompts without truncation. No labels or original session identifiers enter model requests.",
+  "baseline_policy": "First three distinct owners from the same final passage pool. Verify B/C against saved application selections.",
+  "execution_order": "Rotate three pool orders by case index and repetition. Three independent identical-prompt requests at temperature0. No best-of selection.",
+  "claims": "Selection-only replay over frozen actual retrieval. Reused exposed development questions, not independent holdout or full answer evaluation. Hybrid uses two searches even though its final passage/context cap is matched. No fresh GPU, live hybrid latency, or retriever superiority claim."
+}

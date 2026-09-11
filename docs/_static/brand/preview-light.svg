@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 240" role="img" aria-labelledby="title" color="#16333b">
+  <title id="title">LLGM Return logo on a light background</title>
+  <rect width="760" height="240" rx="20" fill="#ffffff"/><g transform="translate(94 45) scale(1.5)">
+  <g transform="translate(55 52.5) scale(1.1052631579) translate(-50 -50)">
+    <path d="M76 24H40Q24 24 24 40V60Q24 76 40 76H60Q76 76 76 60V54Q76 44 66 44H49Q43 44 43 50V58H57" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g transform="translate(-5 0)" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="square" stroke-linejoin="round">
+    <path d="M133 27V77H163"/>
+    <path d="M187 27V77H217"/>
+    <path d="M280 35C275 29 269 26 262 26C246 26 238 38 238 52C238 67 247 79 263 79C271 79 278 76 283 70V54H265"/>
+    <path d="M308 77V27L331 54L354 27V77"/>
+  </g></g>
+</svg>

@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "experiment_id": "node-search-opaque-v1-2026-09-11",
+  "frozen_date": "2026-09-11",
+  "colbert_pins_sha256": "28af0826c97b6e03797d63974af012bf6ab5b23bcd5bd238bf39bcc0ce433fd4",
+  "arms": [
+    {
+      "backend": "bm25",
+      "retrieval_k": 12,
+      "max_seed_nodes": 3
+    },
+    {
+      "backend": "bm25",
+      "retrieval_k": 40,
+      "max_seed_nodes": 3
+    },
+    {
+      "backend": "colbertv2_plaid",
+      "retrieval_k": 12,
+      "max_seed_nodes": 3
+    },
+    {
+      "backend": "colbertv2_plaid",
+      "retrieval_k": 40,
+      "max_seed_nodes": 3
+    }
+  ],
+  "warm_repetitions": 5,
+  "query_policy": "original query, no rewrite",
+  "selection_policy": "actual LLGM._seeds first occurrence of unique owner; no ranking change",
+  "evidence_policy": "real Evidence.search with injected retriever over identical tokenizer passages, sources only, no journals",
+  "chunking": {
+    "window": 180,
+    "overlap": 32
+  },
+  "replication_indexes": {},
+  "expanded_selection": {
+    "rule": "lowest SHA256(salt + colon + case_id), four non-abstention cases per original question_type, excluding prior pilot",
+    "salt": "llgm-node-search-v1-2026-09-11",
+    "exclude": [
+      "001be529",
+      "01493427",
+      "00ca467f",
+      "031748ae",
+      "031748ae_abs"
+    ],
+    "strata": {
+      "knowledge-update": [
+        "dad224aa",
+        "184da446",
+        "72e3ee87",
+        "603deb26"
+      ],
+      "multi-session": [
+        "gpt4_731e37d7",
+        "gpt4_372c3eed",
+        "2788b940",
+        "a4996e51"
+      ],
+      "single-session-assistant": [
+        "cc539528",
+        "65240037",
+        "e982271f",
+        "f523d9fe"
+      ],
+      "single-session-preference": [
+        "1da05512",
+        "06f04340",
+        "0a34ad58",
+        "fca70973"
+      ],
+      "single-session-user": [
+        "21436231",
+        "6f9b354f",
+        "60d45044",
+        "545bd2b5"
+      ],
+      "temporal-reasoning": [
+        "gpt4_7f6b06db",
+        "gpt4_59149c78",
+        "0bc8ad93",
+        "8c18457d"
+      ]
+    }
+  },
+  "controlled_manifest": "experiments/node_search_controlled.json",
+  "arm_order": "case index even: BM25 then ColBERT; odd: ColBERT then BM25; cutoff order alternates similarly",
+  "metrics": [
+    "candidate gold-node recall",
+    "selected gold-node recall",
+    "all required nodes present",
+    "candidate-missing gold nodes",
+    "candidate-present but unselected gold nodes",
+    "unlabeled selected nodes",
+    "unique node count",
+    "duplicate passage concentration",
+    "largest owner share",
+    "search and seed-selection latency",
+    "failures",
+    "k12/k40 prefix and selected-set stability"
+  ],
+  "capacity_policy": "report gold node count > 3 separately; no-positive/abstention recall is null",
+  "claims": "Corrected diagnostic comparison after discovering that original LongMemEval session identifiers reveal answer-source membership. Repeat exactly the same 24 expanded cases with opaque source identities; do not select cases from observed retrieval outcomes. All cases remain exposed development inputs in one shared-history component. No held-out generalization, answer accuracy, exact-versus-PLAID effect, or isolated causal estimate of the identifier change is claimed. The separately completed controlled cohort is not rerun under this protocol.",
+  "limits": {
+    "gpu": "A10",
+    "max_gpu_containers": 1,
+    "worker_timeout_seconds": 3300,
+    "function_timeout_seconds": 3600,
+    "max_failed_histories": 3,
+    "paid_spend_ceiling_usd_from_user": 20,
+    "cost_usd": null
+  },
+  "controlled_manifest_sha256": "624ab3cf3a4d39b0a132374bb5483d16693349a6136e5738c9bf2d6dcac93e14",
+  "parent_protocol_sha256": "21ee53d13caeb639bc3c1d7b68f46756923e82250ec35bfc056c6fa3d9b2fe3b",
+  "include_controlled": false,
+  "source_identity_policy": "opaque_case_node_v1",
+  "expected_longmemeval_cases": 24,
+  "source_identity_requirements": "Assign deterministic opaque source IDs without consulting gold annotations; remove original session IDs from retriever-visible source IDs and metadata; preserve source order, dates, roles and full turn text. Keep original-session aliases and evidence labels in evaluator-only records."
+}

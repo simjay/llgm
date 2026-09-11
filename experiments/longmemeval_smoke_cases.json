@@ -1,0 +1,302 @@
+[
+  {
+    "question_id": "smoke-01",
+    "question": "What color was Mara's bicycle?",
+    "question_date": "2024/09/01 (Sun) 12:00",
+    "question_type": "single-session-user",
+    "answer": "yellow",
+    "haystack_session_ids": [
+      "session-0-a",
+      "session-0-b"
+    ],
+    "haystack_dates": [
+      "2024/08/01 (Thu) 12:00",
+      "2024/08/02 (Fri) 12:00"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "Mara bought a yellow bicycle."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "The helmet Mara bought is black."
+        }
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "smoke-02",
+    "question": "Where did Luis leave the spare key?",
+    "question_date": "2024/09/01 (Sun) 12:00",
+    "question_type": "single-session-user",
+    "answer": "with Inez",
+    "haystack_session_ids": [
+      "session-1-a",
+      "session-1-b"
+    ],
+    "haystack_dates": [
+      "2024/08/01 (Thu) 12:00",
+      "2024/08/02 (Fri) 12:00"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "Luis left the spare key with his neighbor Inez."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "Luis keeps his passport in a drawer."
+        }
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "smoke-03",
+    "question": "Which instrument did the assistant suggest for beginner lessons?",
+    "question_date": "2024/09/01 (Sun) 12:00",
+    "question_type": "single-session-assistant",
+    "answer": "ukulele",
+    "haystack_session_ids": [
+      "session-2-a",
+      "session-2-b"
+    ],
+    "haystack_dates": [
+      "2024/08/01 (Thu) 12:00",
+      "2024/08/02 (Fri) 12:00"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "I want beginner music lessons."
+        }
+      ],
+      [
+        {
+          "role": "assistant",
+          "content": "The assistant suggested a ukulele for beginner lessons."
+        }
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "smoke-04",
+    "question": "What are the two ingredients Noor needs for the soup?",
+    "question_date": "2024/09/01 (Sun) 12:00",
+    "question_type": "multi-session",
+    "answer": "leeks and potatoes",
+    "haystack_session_ids": [
+      "session-3-a",
+      "session-3-b"
+    ],
+    "haystack_dates": [
+      "2024/08/01 (Thu) 12:00",
+      "2024/08/02 (Fri) 12:00"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "Noor needs leeks for the soup."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "Noor also needs potatoes for the soup."
+        }
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "smoke-05",
+    "question": "Which city did Tessa visit after Oslo?",
+    "question_date": "2024/09/01 (Sun) 12:00",
+    "question_type": "temporal-reasoning",
+    "answer": "Riga",
+    "haystack_session_ids": [
+      "session-4-a",
+      "session-4-b"
+    ],
+    "haystack_dates": [
+      "2024/08/01 (Thu) 12:00",
+      "2024/08/02 (Fri) 12:00"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "Tessa visited Oslo in June 2024."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "Tessa then visited Riga in July 2024."
+        }
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "smoke-06",
+    "question": "What is Eli's current office number?",
+    "question_date": "2024/09/01 (Sun) 12:00",
+    "question_type": "knowledge-update",
+    "answer": "417",
+    "haystack_session_ids": [
+      "session-5-a",
+      "session-5-b"
+    ],
+    "haystack_dates": [
+      "2024/08/01 (Thu) 12:00",
+      "2024/08/02 (Fri) 12:00"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "Eli originally worked in office 203."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "Eli moved from office 203 to office 417."
+        }
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "smoke-07",
+    "question": "What snack should we suggest for Priya based on her preference?",
+    "question_date": "2024/09/01 (Sun) 12:00",
+    "question_type": "single-session-preference",
+    "answer": "Recommend roasted chickpeas, respecting her savory preference.",
+    "haystack_session_ids": [
+      "session-6-a",
+      "session-6-b"
+    ],
+    "haystack_dates": [
+      "2024/08/01 (Thu) 12:00",
+      "2024/08/02 (Fri) 12:00"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "Priya prefers savory snacks and dislikes sweets."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "Priya especially enjoys roasted chickpeas."
+        }
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "smoke-08",
+    "question": "What is the production database for Juniper?",
+    "question_date": "2024/09/01 (Sun) 12:00",
+    "question_type": "single-session-user",
+    "answer": "PostgreSQL",
+    "haystack_session_ids": [
+      "session-7-a",
+      "session-7-b"
+    ],
+    "haystack_dates": [
+      "2024/08/01 (Thu) 12:00",
+      "2024/08/02 (Fri) 12:00"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "Juniper production runs PostgreSQL."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "Juniper staging runs SQLite."
+        }
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "smoke-09",
+    "question": "Has the Ember launch been approved?",
+    "question_date": "2024/09/01 (Sun) 12:00",
+    "question_type": "multi-session",
+    "answer": "No, it has not been approved.",
+    "haystack_session_ids": [
+      "session-8-a",
+      "session-8-b"
+    ],
+    "haystack_dates": [
+      "2024/08/01 (Thu) 12:00",
+      "2024/08/02 (Fri) 12:00"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "The Ember launch has not been approved."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "A budget proposal for Ember was submitted."
+        }
+      ]
+    ],
+    "answer_session_ids": []
+  },
+  {
+    "question_id": "smoke-10_abs",
+    "question": "What is Rowan's shoe size?",
+    "question_date": "2024/09/01 (Sun) 12:00",
+    "question_type": "single-session-user",
+    "answer": "The conversations never state Rowan's shoe size.",
+    "haystack_session_ids": [
+      "session-9-a",
+      "session-9-b"
+    ],
+    "haystack_dates": [
+      "2024/08/01 (Thu) 12:00",
+      "2024/08/02 (Fri) 12:00"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "Rowan likes hiking on weekends."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "Rowan owns a green backpack."
+        }
+      ]
+    ],
+    "answer_session_ids": []
+  }
+]

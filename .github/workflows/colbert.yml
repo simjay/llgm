@@ -1,0 +1,45 @@
+name: ColBERT and PLAID GPU integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: colbert-modal
+  cancel-in-progress: false
+
+jobs:
+  gpu-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Require Modal authentication
+        shell: bash
+        run: |
+          test -n "$MODAL_TOKEN_ID" || { echo "Set the MODAL_TOKEN_ID repository secret"; exit 1; }
+          test -n "$MODAL_TOKEN_SECRET" || { echo "Set the MODAL_TOKEN_SECRET repository secret"; exit 1; }
+      - name: Install the local SDK and development tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --group dev '.[modal]'
+          python -m pip check
+      - name: Build, search and reopen a real ColBERT index on Modal
+        run: make test-colbert PYTHON=python
+      - name: Retain GPU integration artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: colbert-modal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: runs/colbert-modal/
+          if-no-files-found: warn

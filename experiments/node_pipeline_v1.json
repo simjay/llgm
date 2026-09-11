@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "models": {
+    "root": {"provider": "openai", "model": "gpt-6-astra", "api_key_env": "OPENAI_API_KEY"},
+    "sidecar": {"provider": "openai", "model": "gpt-5.6-terra", "api_key_env": "OPENAI_API_KEY"}
+  },
+  "budget": {
+    "max_model_calls": 16,
+    "max_sidecar_calls": 12,
+    "max_searches": 8,
+    "max_evidence_tokens": 65536,
+    "max_bundle_tokens": 24000,
+    "max_context_tokens": 131072,
+    "max_output_tokens": 2048,
+    "timeout_seconds": 180
+  },
+  "runtime": {
+    "max_depth": 3,
+    "max_steps": 12,
+    "max_operations": 128,
+    "max_seed_nodes": 3,
+    "retrieval_k": 12,
+    "max_concurrency": 3,
+    "max_journal_bytes": 65536
+  },
+  "repl": {
+    "image": "sha256:ec7d6c95cd3692a2e2d228a8b1ca74e4025b54121fcc4c5da6f09cfa473315ad",
+    "execution_timeout_seconds": 120
+  },
+  "arm_order_seed": 1729,
+  "max_total_model_calls": 255,
+  "max_total_seconds": 1800
+}
