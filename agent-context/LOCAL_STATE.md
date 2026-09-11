@@ -22,7 +22,17 @@ replacement and retained original text. The standalone correction tutorial also
 ran successfully. All nine public Python snippets parsed. Hosted examples were
 reviewed against current interfaces but no hosted calls were made for this audit.
 The earlier package check confirmed that source archives exclude internal notes
-and design explorations. This work does not configure or deploy hosting.
+and design explorations. No public site has been deployed.
+
+The project was pushed to private `simjay/llgm` at `902ec7b`. GitHub Actions
+[built and audited the documentation](https://github.com/simjay/llgm/actions/runs/34658822776)
+and uploaded the HTML artifact. Deployment was skipped. The first CI run exposed
+two test dependencies on the checkout import path and working directory. Both
+tests now resolve repository tooling and fixtures from their own file location.
+A clean installed-wheel run outside the checkout passed 1,022 tests and 245
+subtests, with 56 optional checks skipped. GitHub validation of these repairs is
+pending. Read the Docs is not connected. Its Community service needs a public
+repository, while the current private repository requires Business hosting.
 
 | Resource | Last observed state |
 | --- | --- |

@@ -300,7 +300,8 @@ authorized. Publication awaits that approval. The package remains unpublished.
 **Next step:** Validate CI on the declared Python versions. After explicit
 publication approval, enable Actions as the repository's Pages source, set the
 publishing variable, run the workflow, and verify the public site. Connecting
-the repository to Read the Docs is an alternative hosting route. Before a PyPI release,
+the repository to Read the Docs is an alternative hosting route and requires
+Business hosting while the repository is private. Before a PyPI release,
 verify package ownership, metadata, README asset URLs, and reproducibility from an
 installed distribution. Follow [publishing](../development/publishing.md).
 

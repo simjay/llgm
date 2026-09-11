@@ -491,7 +491,8 @@ def test_failed_query_preserves_phase_latency_and_call_identity(
     monkeypatch.setattr(memory_benchmark, "answer_baseline", failing_reader)
     pinned, root = pinned_history
     cases, _ = prepare(pinned, root)
-    protocol = json.loads(Path("experiments/longmemeval_smoke_v1.json").read_text())
+    protocol_path = Path(__file__).resolve().parents[1] / "experiments/longmemeval_smoke_v1.json"
+    protocol = json.loads(protocol_path.read_text())
     if effort is not None:
         protocol["root_reasoning_effort"] = effort
 

@@ -1,21 +1,35 @@
 """Verify selection-run accounting and failures without invoking paid providers."""
 
 import asyncio
+import importlib.util
 import json
+import sys
 from dataclasses import asdict
+from pathlib import Path
 
 import pytest
 
 from llgm.evaluation.longmemeval import GoldRecord
 from llgm.evaluation.node_search import node_coverage_metrics
 from llgm.models.base import Message, ModelRequest, ModelResponse, ScriptedModelClient, Usage
-from tools.node_selection_experiment import (
-    POOLS,
-    execute,
-    prepare,
-    restore_request,
-    usage_cost,
-)
+
+
+def load_tool(name):
+    """Load repository tooling without making checkout packages importable."""
+    spec = importlib.util.spec_from_file_location(
+        name, Path(__file__).resolve().parents[1] / "tools" / f"{name}.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+experiment = load_tool("node_selection_experiment")
+POOLS = experiment.POOLS
+execute = experiment.execute
+prepare = experiment.prepare
+restore_request = experiment.restore_request
+usage_cost = experiment.usage_cost
 
 PRICING = {
     "usd_per_million_input_tokens": 0.4,
@@ -160,7 +174,8 @@ def test_truncation_is_failure_even_if_text_looks_parseable(tmp_path):
     assert all(pool["trials"][0]["status"] == "failed" for pool in result["cases"][0]["pools"])
 
 
-def test_unsupported_protocol_is_rejected_before_reading_inputs(tmp_path):
+def test_unsupported_protocol_is_rejected_before_reading_inputs(tmp_path, monkeypatch):
     """Changed comparison shape cannot dispatch the declared experiment."""
+    monkeypatch.setitem(sys.modules, "tools.node_search_cases", load_tool("node_search_cases"))
     with pytest.raises(ValueError, match="Unsupported"):
         prepare({"schema_version": 2}, tmp_path)

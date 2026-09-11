@@ -102,6 +102,11 @@ available for tools and tests.
 
 ## Connect the repository to Read the Docs
 
+Read the Docs pulls from the Git repository. It is not another Git push target.
+Its free Community service supports public repositories. Connecting the current
+private `simjay/llgm` repository requires Read the Docs Business. See
+[Business hosting](https://docs.readthedocs.com/platform/stable/commercial/index.html).
+
 1. Push the package source, `docs/`, documentation tools, linked example scripts,
    `Makefile` and `.readthedocs.yaml` to the intended Git repository.
 2. Sign in to Read the Docs and import that repository. Select the intended
