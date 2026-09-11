@@ -2,9 +2,8 @@
 
 The configuration was frozen at 2026-09-10T07:07:42Z in
 `e03_non_colbert_pilot.json`, before the pilot's retrieval or answering calls.
-All 15 retrieval diagnostics and 45 answering attempts completed. The
-[dated validation report](../research/reports/live-validation-2026-09-10.md#frozen-bdh-pilot)
-records the results. This was a five-case diagnostic, not a confirmatory experiment
+All 15 retrieval diagnostics and 45 answering attempts completed.
+This was a five-case diagnostic, not a confirmatory experiment
 or a benchmark superiority result.
 
 The five LongMemEval-S cases were `3fdac837`, `86b68151`, `e61a7584`, `720133ac`,

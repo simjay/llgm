@@ -15,14 +15,21 @@ development, testing, release operations, and research have separate homes.
 | `development/` | Repository-only contributor and maintainer guides: checkout setup, code ownership, standards, testing, documentation, branding, and publication. |
 | `examples/` | Runnable examples, indexed by its `README.md`. |
 | `experiments/` | Repository-only benchmark configurations, frozen protocols, source pins, and run commands. |
-| `research/` | Internal designs, hypotheses, original briefs, and dated measurements. Excluded from the documentation site and source distribution. |
-| `AGENTS.md` and `agent-context/` | Internal agent instructions, decisions, code ownership, and task state. Excluded from the documentation site and source distribution. |
+| `AGENTS.md` | Tracked instructions for agents working in a fresh clone. Contributor guidance remains in `CONTRIBUTING.md` and `development/`. Excluded from the documentation site and source distribution. |
+| Local `research/` | Ignored, untracked designs, hypotheses, original briefs, and dated measurements. Never committed, pushed, or published. |
+| Local `agent-context/` | Optional ignored, untracked decisions, code ownership notes, and task state. Never committed, pushed, or published. |
 
 Give each fact a canonical home. Instructions for running the library belong in
 `docs/`. Instructions for changing, testing, or releasing this repository belong
 in `development/`. Agent notes may refer to either without copying them. Keep
 machine paths, transient credential availability, and current task state in
-agent context. Never store credentials in any of these documents.
+local agent context. Never store credentials in any of these documents.
+
+Keep `research/` and `agent-context/` on the local filesystem only. Do not stage,
+commit, push, or copy their contents into tracked files, package archives, or
+published assets. Tracked documentation must not link to either directory.
+Contributor instructions, tests, and builds must work in a fresh clone where
+neither directory exists.
 
 The user documentation must stand alone. Its explanations, examples, navigation
 and build checks must work without `research/`, `agent-context/`, `AGENTS.md`,
@@ -82,10 +89,10 @@ step changes the example. Keep field lists and detailed contracts in reference
 sections. Check examples against current signatures and remove obsolete advice
 instead of keeping a history of previous designs in user pages.
 
-Keep historical records in their owning repository directories. Preserve
-original briefs, frozen experiment inputs, and measured conditions. A current
-public guide describes supported behavior and limitations without reproducing
-internal reports or task history.
+Keep original briefs and dated research reports in local `research/`. Preserve
+frozen experiment protocols in `experiments/` and generated run artifacts in
+ignored `runs/`. A current public guide describes supported behavior and
+limitations without reproducing internal reports or task history.
 
 ## Update the document that owns the change
 
@@ -95,8 +102,8 @@ internal reports or task history.
 | Internal module boundary or resource ownership | Development code map and relevant implementation docstrings. Update user architecture only when observable behavior or a supported extension contract changes. |
 | Validation command or contributor requirement | Development setup, testing guide, or standards, plus any command wrappers and CI that implement it. |
 | Benchmark method or frozen inputs | Repository-only experiment instructions and the applicable protocol. Create a new protocol version for a changed frozen run. |
-| Completed measurement | Internal dated report with code/input identities, denominators, limitations, and artifact locations. Update public capability limits only when the evidence supports them. |
-| Internal task progress or local prerequisite | Agent backlog or local state, outside the published documentation. |
+| Completed measurement | Local dated report with code/input identities, denominators, limitations, and artifact locations. Update public capability limits only when the evidence supports them. |
+| Internal task progress or local prerequisite | Existing local agent backlog or local state, kept untracked. |
 
 State implemented and verified behavior separately. Code and completed checks
 determine what is supported. A later code change does not rerun an earlier
@@ -108,8 +115,10 @@ Run `make docs` after documentation or navigation changes. It performs a strict
 Sphinx build and audits the rendered API, public authored and HTML links, prose
 punctuation, and exclusion of repository-only material from published output.
 It does not read or validate internal writing. Use `make docs-links` separately
-to check links across repository Markdown, including research and agent context.
-That optional check is not a documentation build prerequisite.
+to check links across repository Markdown. It also checks local research and
+agent context when present, and tolerates their absence in a fresh clone.
+That optional check is not a documentation build prerequisite. Keep the
+publication exclusion checks even when those local directories are absent.
 
 Inspect the affected pages,
 including their sidebar hierarchy, images, downloads, code blocks, and diagrams.

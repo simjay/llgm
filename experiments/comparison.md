@@ -54,6 +54,5 @@ usage, traces and a summary. Missing credentials produce a `not_run` record with
 zero model calls. They never trigger scripted replacement responses.
 
 Freeze another file before changing models, budgets, inputs or scoring. Retain
-the original file and its results. Keep measurements in the internal
-[research reports](../research/reports/README.md). Neither these instructions nor
-the internal research records are part of the published library documentation.
+the original file and its results. Save measurements alongside each run's
+artifacts. These operator instructions are separate from the library documentation.

@@ -29,7 +29,6 @@ installing the local `colbert` extra or replacing other optional dependencies.
 | --- | --- |
 | `make colbert-prepare` | Build the remote environment and download or verify pinned weights and public data. |
 | `make test-colbert` | Prepare assets, then check real build, search, reopen and local client retrieval. |
-| `make benchmark-colbert` | Compare BM25 and ColBERTv2 + PLAID with the configured real-history inputs. |
 | `make colbert-shell` | Open an interactive shell with the GPU test image and Volume mounts. Exit the shell when finished. |
 | `make colbert-deploy` | Deploy the remote retrieval functions for authenticated SDK calls from local LLGM. |
 
@@ -38,7 +37,7 @@ Set the workspace's spend limit before running them. SDK timeouts and concurrenc
 limits bound execution. They do not implement strict dollar admission. No OpenAI
 or Anthropic credentials are used by these retrieval commands.
 
-Each Make target wraps `tools/colbert_modal.py`. Direct invocation supports
+The remote Make targets wrap `tools/colbert_modal.py`. Direct invocation supports
 `--action prepare`, `--action test` and `--action benchmark`, with optional
 `--run-id` for an explicit artifact identity:
 
@@ -107,6 +106,17 @@ process-independent reopen. A fresh container establishes the additional remote
 storage boundary only when the retained run records that check.
 
 ## Retrieval comparison
+
+The initial comparison is a completed diagnostic. To reproduce it, invoke the
+preserved runner directly with a new run ID:
+
+```bash
+.venv/bin/python -m modal run tools/colbert_modal.py \
+  --action benchmark --run-id UNIQUE
+```
+
+This command starts a paid remote job. The Makefile keeps the recurring ColBERT
+development commands above, while this frozen comparison stays in this guide.
 
 The initial arms are **B: BM25** and **C: ColBERTv2 + PLAID**. They use identical
 source histories, tokenizer-defined passage boundaries, queries and retrieval

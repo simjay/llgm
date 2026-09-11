@@ -2,8 +2,8 @@
 
 This is a completed historical diagnostic. Its candidate selector has not been
 adopted as the product default. Follow-up answering experiments also completed.
-Use the [roadmap](../research/ROADMAP.md#node-search-improvement-order) for current
-priorities and retain the frozen inputs below for reproduction.
+Retain the frozen inputs below for reproduction. The current benchmark procedure
+is in the [LongMemEval guide](longmemeval.md).
 
 This experiment tests whether a small hosted model selects a more complete set
 of evidence nodes than the first-three-distinct-owners rule. It also tests whether

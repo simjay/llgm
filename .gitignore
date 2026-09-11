@@ -21,3 +21,8 @@ runs/
 .coverage.*
 htmlcov/
 coverage.xml
+
+# Local research and agent working context
+/research/
+/agent-context/
+/.agents/

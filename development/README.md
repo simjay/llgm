@@ -14,8 +14,14 @@ below apply from the repository root.
 | [Brand assets](branding.md) | Maintain the project logo, icons, and repository design assets. |
 
 Run `make` from the repository root to see the available commands. The default
-target prints help. Installing dependencies and running checks are explicit
-steps.
+target prints help grouped by everyday development, documentation and packages,
+local data checks, the current LongMemEval pilot, and remote ColBERT development.
+Installing dependencies and running checks are explicit steps. Paid API and
+Modal commands run only when their targets are selected.
+
+Make targets cover repeated development tasks and the current evaluation.
+Historical experiments keep their direct reproduction commands in
+[the experiment guides](../experiments/README.md).
 
 ## Set up a checkout
 

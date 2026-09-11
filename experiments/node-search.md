@@ -1,9 +1,8 @@
 # Node-search diagnostic
 
 This is a completed historical diagnostic. Its frozen protocol and reproduction
-commands remain below. Current follow-up priorities are in the
-[roadmap](../research/ROADMAP.md#node-search-improvement-order), and supported
-selection behavior is in the [node-search guide](../docs/guide/node-search.md).
+commands remain below. Supported selection behavior is in the
+[node-search guide](../docs/guide/node-search.md).
 
 This experiment measures where evidence is lost between passage retrieval and
 the admission of up to three source nodes. The current frozen protocol is
@@ -63,11 +62,7 @@ Use the configured Modal account and the prerequisites in
 is needed. The corrected job builds indexes from sources with opaque identifiers
 and verifies their canonical passage identities.
 
-```bash
-make benchmark-node-search
-```
-
-For an explicit unique run label:
+Reproduce this historical diagnostic with the preserved runner and a new run ID:
 
 ```bash
 .venv/bin/python -m modal run tools/colbert_modal.py \

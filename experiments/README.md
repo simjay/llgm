@@ -61,11 +61,6 @@ The ColBERT workflow remains an optional integration check.
 | [Focused node configuration](node_pipeline_focused_v1.json) | Explicit models and execution limits for the focused checks |
 | [Source pins](source_pins.json) | Dataset and tokenizer revisions, checksums and preparation provenance |
 
-Research hypotheses and dated measurements are internal. They live in
-[research/design](../research/design/README.md) and
-[research/reports](../research/reports/README.md), separate from public library
-guides and API documentation.
-
 Current preparation writes schema 2 with immutable node references. Regenerate
 older prepared corpora in a new directory. Preflight rejects their schema instead
 of changing stored references. The v3 architecture comparison preserves earlier model/budget pins and case

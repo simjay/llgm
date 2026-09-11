@@ -8,7 +8,7 @@ generates follow-ups after inspection, with at most four searches and forty hit
 slots. All arms use the same source representation, reader/model pair and
 evidence limits. Each case searches only its own supplied haystack.
 
-This guide covers data preparation and execution. Model IDs, local ColBERT assets, checkpoint checksum, and repository revision remain explicit unresolved pins in the full-matrix template. No dependency or checkpoint downloads happen on import. Optional adapters fail with actionable capability errors rather than changing retrieval methods. The completed B/D/H subset is documented in the [pilot protocol](NON_COLBERT_PILOT.md) and [live validation report](../research/reports/live-validation-2026-09-10.md).
+This guide covers data preparation and execution. Model IDs, local ColBERT assets, checkpoint checksum, and repository revision remain explicit unresolved pins in the full-matrix template. No dependency or checkpoint downloads happen on import. Optional adapters fail with actionable capability errors rather than changing retrieval methods. The completed B/D/H subset is documented in the [pilot protocol](NON_COLBERT_PILOT.md).
 
 These commands use the installed checkout and produce a new measurement. They do
 not reproduce the historical runner or migrate its prepared artifacts. For the
@@ -20,9 +20,14 @@ turn-relative span. Preflight rejects old manifests and versioned source
 references. Use a new preparation directory for the commands below if an earlier
 output already exists. Keep historical corpora and results.
 
-The scientific reference remains the actual released Stanford ColBERTv2 checkpoint and official PLAID implementation. Hosting that same implementation remotely is a deployment choice. Jina/AnswerAI models, other index engines, or hosted candidate rerankers are different experimental arms and cannot replace C under its existing name. A remote reference service must preserve corpus isolation and provide reproducible model/index configuration plus timing and usage records. Its adapter is not implemented yet.
+The scientific reference remains the actual released Stanford ColBERTv2 checkpoint and official PLAID implementation. Hosting that same implementation remotely is a deployment choice. Jina/AnswerAI models, other index engines, or hosted candidate rerankers are different experimental arms and cannot replace C under its existing name. A remote reference service must preserve corpus isolation and provide reproducible model/index configuration plus timing and usage records.
 
-The twelve-arm matrix holds one model pair fixed to isolate retrieval. It is only one part of the research plan. The [model allocation protocol](../research/design/experiments.md#91-required-model-allocation-comparisons) adds three root models by three smaller sidecars, same-model controls, ordinary RLM, full LLGM, and mechanism ablations. The current runner accepts one model pair. Broader model-allocation orchestration remains unimplemented. The [implementation status](../docs/reference/implementation-status.md) records the available mechanisms.
+The separate [Modal workflow](colbert.md) implements authenticated remote retrieval
+through `ModalColBERTRetriever`. E03's C arm still constructs a local
+`ColBERTRetriever`. Connecting this matrix to the remote adapter requires
+additional runner integration.
+
+The twelve-arm matrix holds one model pair fixed to isolate retrieval. The current runner accepts one model pair. Broader model-allocation orchestration remains unimplemented. The [implementation status](../docs/reference/implementation-status.md) records the available mechanisms.
 
 ## Offline plumbing
 
@@ -104,8 +109,7 @@ ColBERT implementation revision required for indexing and search. The original
 query-length audit found 61 of 500 questions exceeding 32 ColBERT tokens, with a
 maximum of 69. The template uses `query_maxlen=128` to preserve those inputs.
 Generated queries must also fit that limit or fail visibly. This was an
-input-compatibility choice made before answer-quality tuning. Historical artifact locations
-are recorded in the [initial preparation report](../research/reports/implementation-2026-09-09.md#preparation-artifacts).
+input-compatibility choice made before answer-quality tuning.
 
 ## Separate development and evaluation
 
@@ -213,8 +217,12 @@ llgm experiment export-official --predictions runs/e03-new/answering/B-S/predict
 
 This produces the released scorer's `question_id`/`hypothesis` schema, retaining failed cases with their recorded prediction. It never launches a paid judge. Invoke a separately checked-out, revision-pinned official `evaluate_qa.py` with the chosen judge model, this export, and the original dataset. Record judge/rubric pins and outputs before reporting official scores. Local normalized exact match is always labeled diagnostic.
 
-References: [LongMemEval data and scorer](https://github.com/xiaowu0162/LongMemEval), [official ColBERT and released checkpoint](https://github.com/stanford-futuredata/ColBERT). The adapter targets the official PLAID Indexer/Searcher path. Genuine ColBERT index/search execution remains unverified. The later hosted B/D/H pilot is recorded separately below.
+References: [LongMemEval data and scorer](https://github.com/xiaowu0162/LongMemEval), [official ColBERT and released checkpoint](https://github.com/stanford-futuredata/ColBERT).
+
+The C arm targets the official PLAID Indexer and Searcher. The complete twelve-arm
+E03 matrix remains unverified. Separate Modal integration checks have passed real
+index building, search, persisted reopening, and retrieval through the local client.
 
 ## Explicit non-ColBERT scope
 
-The [five-case pilot](NON_COLBERT_PILOT.md) freezes the B/D/H × S/U/A subset in `e03_non_colbert_pilot.json`. Pass `--required-backends B D H` to preflight and execution. C is unchecked and cannot be dispatched outside the declared scope. The full matrix remains incomplete. A standalone `tokenizer` section holds the local passage tokenizer path/revision without using ColBERT encoder pins. See the [validation report](../research/reports/live-validation-2026-09-10.md) for results.
+The [five-case pilot](NON_COLBERT_PILOT.md) freezes the B/D/H × S/U/A subset in `e03_non_colbert_pilot.json`. Pass `--required-backends B D H` to preflight and execution. C is unchecked and cannot be dispatched outside the declared scope. The full matrix remains incomplete. A standalone `tokenizer` section holds the local passage tokenizer path/revision without using ColBERT encoder pins.

@@ -3,8 +3,7 @@
 This completed historical diagnostic retains its original protocol and run
 commands. The primary evaluation now uses [LongMemEval](longmemeval.md).
 Later runtime repairs and the five-question pilot are separate from these frozen
-attempts. Current follow-up work is in the
-[roadmap](../research/ROADMAP.md#node-search-improvement-order).
+attempts.
 
 This diagnostic asks whether different initial node choices improve actual
 answers after recursive evidence gathering. It follows the
