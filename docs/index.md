@@ -1,37 +1,47 @@
 # LLGM documentation
 
-LLGM is a Python library for answering questions across stored conversations.
-It keeps the original text, finds relevant passages, and lets smaller models
-investigate the evidence before a root model writes an answer with references.
+Build LLM applications that can answer questions using earlier conversations.
+LLGM stores the original text, connects related sources, and lets models read the
+passages they need. Answers include references you can open and inspect.
 
 ## Start here
 
-- **Run your first example:** [Quickstart](guide/quickstart.md) takes you from
-  installation to storing a conversation and asking a question.
-- **Understand the design:** [Concepts](guide/concepts.md) introduces the pieces
-  through an example, then [Architecture](guide/architecture.md) follows an answer
-  from search to synthesis.
+- [Quickstart](guide/quickstart.md): install LLGM, store a conversation, ask a
+  question, and read the cited source.
+- [Concepts](guide/concepts.md): learn how stored conversations, links, and
+  smaller-model readers work together.
+- [Evidence walkthrough](guide/walkthrough.md): store, search, link, and correct
+  evidence in Python without calling a model.
 
-LLGM is an alpha installed from source. Inference requires Python 3.11 or later,
-Docker, and model API credentials.
+LLGM is an experimental alpha installed from source. It requires Python 3.11 or
+later. Answer generation also needs Docker and configured model access.
 
-## Explore the library
+## How an answer comes together
 
-Learn how [node search](guide/node-search.md) chooses where to read, or follow the
-[evidence walkthrough](guide/walkthrough.md) to trace an answer and apply a
-correction. Use [Configuration](guide/configuration.md) to choose providers,
-storage, and resource limits.
+1. **Find a starting point.** Search identifies relevant passages and the
+   conversations that contain them.
+2. **Read the evidence.** Smaller models inspect those sources and can ask for
+   more information from linked sources or another search.
+3. **Write the answer.** A final model combines the findings and their references.
 
-The [API reference](reference/api.md) documents Python interfaces.
-[Capabilities and limits](reference/implementation-status.md) explains what the
-current implementation supports.
+Follow this process in [Architecture](guide/architecture.md), then see
+[Node search](guide/node-search.md) for how starting sources are selected.
+
+## Configure your application
+
+Use [Configuration](guide/configuration.md) to choose model providers, storage,
+search, and limits. Local SQLite storage and BM25 search are the defaults.
+
+The [API reference](reference/api.md) covers Python classes and methods.
+[Capabilities and limits](reference/implementation-status.md) explains the
+current support boundaries.
 
 ```{toctree}
 :caption: User guide
 :maxdepth: 2
 :hidden:
 
-Overview <guide/index>
+Guide overview <guide/index>
 guide/quickstart
 guide/concepts
 guide/architecture
@@ -45,7 +55,7 @@ guide/configuration
 :maxdepth: 2
 :hidden:
 
-Overview <reference/index>
+Reference overview <reference/index>
 reference/api
 reference/implementation-status
 ```

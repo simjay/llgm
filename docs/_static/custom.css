@@ -9,3 +9,63 @@
     width: 220px;
     height: auto;
 }
+
+/* Sphinx's multiline signatures inherit paragraph spacing from the RTD theme. */
+.rst-content dl dt.sig {
+    /* The theme uses display: table, whose minimum width can overflow phones. */
+    display: block !important;
+    width: fit-content;
+    max-width: 100%;
+    overflow-x: auto;
+    font-family: SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    font-weight: normal;
+    line-height: 1.6;
+}
+
+.rst-content dl dt.sig em {
+    font-style: normal;
+}
+
+.rst-content dl dt.sig > dl {
+    margin: 0;
+}
+
+.rst-content dl dt.sig > dl > dd {
+    margin: 0 0 0 1.5em;
+}
+
+@media (max-width: 768px) {
+    /* Long setting names must not push the explanation outside the viewport. */
+    .rst-content code.docutils,
+    .rst-content code.docutils .pre {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .rst-content table.genindextable {
+        table-layout: fixed;
+    }
+
+    .rst-content table.genindextable td {
+        display: block;
+        /* Sphinx supplies column widths inline for its desktop index. */
+        width: 100% !important;
+        overflow-wrap: anywhere;
+    }
+
+    html.writer-html5 .rst-content dl.field-list {
+        display: block;
+    }
+
+    html.writer-html5 .rst-content dl.field-list > dt {
+        display: block;
+        padding-left: 0;
+        margin-bottom: 0.5em;
+    }
+
+    html.writer-html5 .rst-content dl.field-list > dd {
+        margin-left: 0;
+        padding-left: 0;
+        margin-bottom: 1em;
+    }
+}

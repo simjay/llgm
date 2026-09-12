@@ -1,8 +1,12 @@
-# Configuration and adapters
+# Configuration
 
 Start with local storage and configure the two model roles. The sidecar model
 reads evidence and can investigate related nodes. The root model combines the
 findings into an answer. Both roles can use the same provider or different ones.
+
+Most applications need only a workspace path, two model IDs and provider
+credentials. The [quickstart](quickstart.md) shows that setup. This guide explains
+how to change it and how to supply your own clients or search backend.
 
 `Settings.from_env()` reads environment variables. Use
 `Settings.load(config_file="llgm.toml", overrides={...})` to add a TOML file or
@@ -50,13 +54,8 @@ variables to the process environment. Existing variables win, including empty
 values. It does not search for files or load them automatically. Omit the call
 when your environment is already configured.
 
-The equivalent CLI option is explicit and can be combined with a TOML file or
-workspace override:
-
-```sh
-llgm ask "What database does Atlas production use?" --env-file .env
-llgm ask "What database does Atlas production use?" --env-file .env --config llgm.toml --workspace ./memory
-```
+The [command-line interface](#ask-from-the-command-line) loads a selected file
+with `--env-file`.
 
 The file accepts one `KEY=value` assignment per line, optional `export`, blank
 lines, and comments. Keys use letters, digits, and underscores, with no leading
@@ -65,6 +64,27 @@ inline comments must be preceded by whitespace. Variables, commands, and escape
 sequences are not expanded. Multiline values are unsupported. A missing file,
 malformed assignment, or duplicate key raises a configuration error before any
 variables are added.
+
+## Ask from the command line
+
+After storing sources in a workspace, ask a question without writing another
+Python script:
+
+```sh
+llgm ask "What database does production use?" --workspace ./memory --env-file .env
+```
+
+This uses the same model configuration and Docker requirements as the Python
+API. Add `--config llgm.toml` to read a TOML file. `--workspace` overrides its
+workspace path. `--node-id` starts from a known source, and `--scope` accepts a
+JSON object selecting edge and journal applicability. It is not an access-control
+or source-search filter.
+
+When the application returns a result, the command writes JSON containing `answer`, `status`,
+`references`, `unresolved`, and `usage`. The exit code is zero for `completed`
+and two for other result statuses. Handled configuration, storage and provider
+errors also exit with two and write an error to standard error. Unexpected
+exceptions may propagate. Check both the exit code and result status in scripts.
 
 ## Providers and settings
 
@@ -90,6 +110,13 @@ variable names, never credential values. `LLGM_ROOT_BASE_URL` and
 `LLGM_SIDECAR_BASE_URL` select individual endpoints. A compatible endpoint
 requires an explicit base URL.
 
+OpenAI uses the Responses API, Anthropic uses the Messages API, and compatible
+endpoints use Chat Completions. Compatible clients default to plain-text output.
+If an endpoint supports native JSON Schema or needs `max_completion_tokens`
+instead of `max_tokens`, construct `OpenAICompatibleModelClient` directly with
+those options. See [client ownership](#own-directly-constructed-clients) and
+[model adapters](../reference/api.md#models-and-embeddings).
+
 The adapters return complete responses rather than streaming tokens. Try your
 chosen models on representative questions. A working connection alone does not
 show that a model can write the inspection code or use the evidence correctly.
@@ -107,6 +134,17 @@ max_model_calls = 12
 ```
 
 Pass the resulting settings to `LLGM.from_settings()` to open the application.
+For example, this reads the file and changes only the workspace location:
+
+```python
+from llgm import Settings
+
+settings = Settings.load(
+    config_file="llgm.toml",
+    overrides={"workspace_path": "./project-memory"},
+)
+```
+
 `settings.redacted()` reports values and field provenance with credential-bearing
 URL components removed. Values loaded from an environment file have
 `environment` provenance because they are read from the process environment.
@@ -158,6 +196,14 @@ runtime never pulls it automatically. Generated code runs in isolated containers
 with no host workspace mount or network access. Model generation and evidence
 callbacks run on the host.
 
+| Environment variable | Default | Controls |
+| --- | --- | --- |
+| `LLGM_NODE_REPL_IMAGE` | `python:3.12-slim` | Python image already present in Docker |
+| `LLGM_RETRIEVAL_K` | 12 | Maximum passages in the initial search |
+| `LLGM_MAX_SEED_NODES` | 3 | Maximum starting nodes selected from those passages |
+| `LLGM_MAX_CONCURRENCY` | 3 | Concurrent seed branches and active model calls |
+| `LLGM_MAX_JOURNAL_BYTES` | 65536 | Serialized operational journal bytes per node |
+
 `LLGM_RETRIEVAL_K` bounds initial passage retrieval, while `LLGM_MAX_SEED_NODES`
 bounds distinct admitted node owners. Require `max_seed_nodes <= retrieval_k <= 40`.
 `LLGM_MAX_CONCURRENCY` queues excess admitted branches and bounds active model
@@ -177,6 +223,22 @@ uses the inference limits in settings. Pass constructor options such as
 `max_depth`, `max_steps`, and `max_operations` to control recursion. Maintenance
 uses the sidecar client by default and has its own `MaintenancePolicy.budget`.
 A directly constructed application can use a separate maintenance client.
+
+These controls are Python constructor options, rather than `LLGM_` environment
+variables. They also work as keyword arguments to `LLGM.from_settings()`:
+
+| Option | Default | Controls |
+| --- | --- | --- |
+| `max_depth` | 3 | Recursive depth beyond each starting node, which has depth zero |
+| `max_steps` | 16 | Model steps within each node invocation |
+| `max_operations` | 128 | Shared operation allowance across the answer |
+| `passage_chars` | 2048 | Character bound for default source indexing passages |
+| `capture_text` | `False` | Additional model-output and code capture in traces |
+
+For Docker CPU, memory or execution limits, pass a `DockerREPLConfig` as
+`repl_config`. An explicit `repl_config` replaces the configuration built from
+`LLGM_NODE_REPL_IMAGE`. Its fields are in the
+[Python execution reference](../reference/api.md#docker-python-execution).
 
 ```python
 from llgm import Budget, LLGM, MaintenancePolicy
@@ -199,21 +261,109 @@ Maintenance settings apply when ingesting or organizing sources. They do not
 change the inference budget. LLGM normally retrieves seeds before node inference.
 An explicit `answer(..., node_id=...)` bypasses retrieval and supplies one seed.
 
-An alternative retrieval backend requires an explicit `evidence_factory`.
-The application uses the same factory for maintenance and answering. See
-[custom search](quickstart.md#use-your-own-search-backend).
+The default maintenance mode is `validated`, which checks proposed relationships
+and publishes accepted links. `propose` returns proposals for review, and
+`disabled` skips maintenance. Original sources remain stored if maintenance
+fails. To skip it for one ingestion, pass `organize=False` to `ingest()`.
+
+### Change limits for one answer
+
+An explicit `budget` replaces the complete application budget. It does not merge
+only the fields you supply. `Budget()` also has smaller defaults than the
+integrated application. Use `replace()` to change one limit while preserving
+the others:
+
+```python
+from dataclasses import replace
+
+
+async def ask_with_more_time(memory, question):
+    """Allow one answer more time while retaining the configured call and text limits."""
+    budget = replace(memory.inference_budget, timeout_seconds=180)
+    return await memory.answer(question, budget=budget)
+```
+
+## Use your own search backend
+
+The default local index updates from new workspace records automatically. To use
+another source retriever, supply an async factory that returns an open `Evidence`
+handle. This helper assumes the retriever already indexes sources in the workspace:
+
+```python
+from llgm import Evidence, LLGM
+
+
+async def ask_with_search(settings, retriever, question):
+    """Search this workspace through a caller-owned retriever."""
+    async def evidence_factory(workspace, *, passage_chars):
+        """Open evidence access using the supplied source retriever."""
+        return await Evidence.open(
+            workspace, retriever, passage_chars=passage_chars,
+        )
+
+    async with LLGM.from_settings(
+        settings, evidence_factory=evidence_factory,
+    ) as memory:
+        return await memory.answer(question)
+```
+
+LLGM uses the factory for both maintenance and answers. Search results must carry
+valid references to this workspace. LLGM reads their original text rather than
+treating returned snippets as evidence. Inline journal notes remain searchable
+in the local index.
+
+You own the supplied retriever, including index updates and cleanup. LLGM closes
+each returned evidence handle after use. Setting `LLGM_RETRIEVER_BACKEND` to a
+name other than `sqlite_fts5` does not create an adapter. It requires this factory.
+See [node search](node-search.md) for backend choices and passage references.
+
+## Own directly constructed clients
+
+`LLGM.from_settings()` closes the workspace and model clients it creates.
+Construct `LLGM` directly to supply custom clients, configure provider-specific
+options, or use a third model for maintenance. You then own those resources.
+
+Register cleanup as each resource is acquired so it also runs if a later step
+fails:
+
+```python
+from contextlib import AsyncExitStack
+
+from llgm import LLGM, Workspace
+from llgm.models import create_model
+
+
+async def ask_with_clients(root_model_id, sidecar_model_id, question):
+    """Use separate providers and close their clients after the answer."""
+    async with AsyncExitStack() as stack:
+        root = create_model("openai", root_model_id)
+        stack.push_async_callback(root.aclose)
+        sidecar = create_model("anthropic", sidecar_model_id)
+        stack.push_async_callback(sidecar.aclose)
+        workspace = await stack.enter_async_context(Workspace.open("./memory"))
+        memory = LLGM(workspace, root, sidecar)
+        return await memory.answer(question)
+```
+
+This helper needs both provider extras and credentials, plus the local Docker
+image. When constructing a native adapter around an existing SDK client, the
+adapter borrows it. Closing that adapter does not close the supplied SDK client.
 
 ## Storage choices
 
 The default workspace stores source blobs locally and metadata in SQLite.
+`LLGM_WORKSPACE_PATH` defaults to `./memory`. Unless overridden, blob files go in
+`./memory/blobs/` and metadata in `./memory/metadata.sqlite3`. Relative paths are
+resolved from the process working directory.
+
 `LLGM_BLOB_BACKEND=s3` with `LLGM_BLOB_URI=s3://bucket/prefix/` selects the S3 blob
 adapter, installed with the `s3` extra. S3 holds immutable objects. The SQLite
 database still needs supported local storage.
 
 `LLGM_DATABASE_URL=sqlite:////absolute/path/metadata.sqlite3` selects another
 SQLite location. Postgres and distributed metadata are unsupported. An attempt
-to open Postgres raises a capability error. The S3 adapter has not been validated
-against a live service.
+to open Postgres raises a capability error. S3 stores source objects only, so it
+does not make the workspace a shared database for multiple machines.
 
 The derived evidence index lives beside the metadata database in a directory
 such as `metadata.sqlite3.indexes`. If restoring a metadata backup, close all
@@ -253,6 +403,12 @@ Date-only conversion requires a supplied timezone and denotes a civil-day start.
 Keep original source dates and question text separately when their precision is
 unknown. `query_date` is model context and never implicitly sets `as_of_ms`.
 
+The `scope` argument selects which edge and journal applicability rules are
+relevant to the question. For example, `scope={"environment": "production"}`
+can select a production-only correction. It does not filter all source searches
+by metadata or enforce access control. Use separate workspaces or enforce access
+in your application when source visibility must be restricted.
+
 Append order decides which matching overwrite takes precedence. Its audit time
 does not. Selecting a date for evidence also does not freeze the workspace.
 An answer may observe records added while it runs.
@@ -271,11 +427,14 @@ control the main limits:
 | `LLGM_MAX_BUNDLE_TOKENS` | 8000 | Selected evidence returned for synthesis |
 | `LLGM_MAX_CONTEXT_TOKENS` | 65536 | Accounted context for a model call |
 | `LLGM_MAX_OUTPUT_TOKENS` | 2048 | Requested output allowance per call |
-| `LLGM_TIMEOUT_SECONDS` | 120 | Total answer time, including preparation |
+| `LLGM_TIMEOUT_SECONDS` | 120 | Deadline for preparation and inference |
 
 Use constructor options for depth, steps and operations, as shown above.
 Maintenance has a separate budget. Ordinary `LLGM` answers have no spending cap
 in dollars.
+
+Cleanup still runs after a deadline or cancellation. Releasing an interpreter
+can extend the time until the call returns.
 
 The default text allowance counts UTF-8 bytes. It is a conservative accounting
 unit rather than a provider tokenizer, despite the `_TOKENS` setting names.
@@ -290,5 +449,5 @@ retains model output and code. Referenced evidence and metadata can still contai
 source data when text capture is disabled. Treat traces as application data.
 
 See [result handling](quickstart.md#understand-the-result) for answer status and
-exception behavior, and [execution mechanisms](architecture.md#execution-mechanisms)
-for advanced execution interfaces.
+exception behavior, and [specialized execution interfaces](../reference/api.md#specialized-execution-interfaces)
+for other ways to supply context and control retrieval.

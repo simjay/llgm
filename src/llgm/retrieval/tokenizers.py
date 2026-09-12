@@ -46,7 +46,7 @@ class DiagnosticTokenizer:
         return len(self.offsets(text))
 
     def descriptor(self) -> dict[str, Any]:
-        """Identify the diagnostic rule and its lack of benchmark compatibility."""
+        """Describe the diagnostic tokenizer and its segmentation rule."""
         return {
             "implementation": "diagnostic",
             "mode": self.mode,

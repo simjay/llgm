@@ -128,6 +128,11 @@ publication exclusion checks even when those local directories are absent.
 
 Inspect the affected pages,
 including their sidebar hierarchy, images, downloads, code blocks, and diagrams.
+Check narrow screens as well as desktop layouts. Setting names in tables and
+API signatures must not push explanations outside the viewport. Run standalone
+storage examples as written, and distinguish application scripts from snippets
+that require a model interpreter. In validation reports, distinguish provider
+examples executed with hosted models from installation and syntax checks.
 When moving or deleting a published page, remove only the generated
 `docs/_build/` directory first, or choose a fresh `DOCS_BUILD_DIR`. A Sphinx
 environment rebuild does not delete obsolete HTML. The audit rejects stale

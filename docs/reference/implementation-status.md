@@ -1,25 +1,27 @@
 # Capabilities and limits
 
-LLGM is an experimental library installed from source. This page describes what
-you can use today and the limits to consider when building an application.
+LLGM is an alpha library installed from source. Storage, search and explicit
+corrections can run without a model or Docker. Answer generation adds configured
+model clients and local Docker execution. This page describes the supported
+features and the limits to consider when building an application.
 
 ## Supported capabilities
 
 | Capability | Current behavior |
 | --- | --- |
 | Integrated application | `LLGM` ingests conversations, maintains primary edges, retrieves starting nodes, delegates reading, and synthesizes an answer. |
-| Source storage | Immutable nodes retain original turns and stable Unicode spans. Idempotency supports ingestion retries. Different observations require new nodes. |
+| Source storage | `Workspace` stores original turns and stable Unicode spans. Idempotency supports ingestion retries. Changed information becomes a new node. |
 | Primary graph | Directed edges retain provenance, applicability, and withdrawal state. Delegates can inspect relationships and investigate their targets. |
-| Journals and corrections | Append-only journals retain history. Explicit scoped patches change effective reads while preserving original and replacement references. |
+| Journals and corrections | Explicit journal writes retain history and can change effective reads. Original and replacement references remain available. Maintenance does not generate these corrections automatically. |
 | Time | Sources can carry event timestamps. Queries and amendments accept numeric validity instants with explicit timezone conversion. |
 | Initial node selection | Ranked passages select the first distinct node owners, up to the configured cap. A supplied `node_id` bypasses initial search. See [node search](../guide/node-search.md). |
 | Node inference | Concurrent branches use isolated Docker Python, lazy source reads, recursive children, and selected citation returns. The root combines their evidence in one final call. |
 | Answer outcomes | Results include status, references, usage, and unresolved needs. Failed or skipped work remains visible even when another branch supplies an answer. |
 | Local retrieval | A reusable incremental SQLite FTS5 index covers source and inline-journal passages. |
-| Retrieval adapters | BM25, dense cosine, hybrid fusion, and optional official ColBERTv2/PLAID adapters. External retrieval requires an explicit factory and compatible source references. |
+| Retrieval adapters | BM25, dense cosine, hybrid fusion, and optional official ColBERTv2/PLAID adapters. A custom source retriever requires an evidence factory and valid workspace references. |
 | Model adapters | Native OpenAI, Anthropic, and OpenAI-compatible endpoints support complete-response generation. Each role can use a separately configured model. |
 | Storage | Local blobs and SQLite metadata are the default. An optional S3 blob adapter is available. Metadata remains local SQLite. |
-| Resource limits | Shared call, search, evidence, context, operation, recursion, and time limits bound an answer. Maintenance has a separate budget. |
+| Resource limits | One answer shares its call, search, evidence, context, operation and time allowances. Recursion depth and per-node steps are also bounded. Maintenance has a separate budget. |
 | Existing workspaces | Metadata schema 3 is supported. A local schema-2 workspace can be explicitly copied after classifying its journal pointers. |
 
 ## Answer quality and citations
@@ -39,7 +41,7 @@ Inspect the answer, references, unresolved reasons, and status together.
 An empty answer with an explicit unresolved reason is a valid partial result.
 An unsuccessful local read does not establish that the fact is absent from the
 whole workspace. See [result handling](../guide/quickstart.md#understand-the-result)
-and [troubleshooting evidence loss](../guide/node-search.md#diagnose-the-stage-that-lost-the-evidence).
+and [troubleshooting evidence loss](../guide/node-search.md#diagnose-missing-evidence).
 
 ## Storage and scale
 
@@ -55,6 +57,10 @@ materialization, and historical deletion policies are not provided.
 Queries read currently published records and may observe new appends between
 operations. A past-date query interprets available evidence at that date. It
 does not reconstruct a past workspace snapshot or ranking.
+
+Query scope selects applicable edges and journal entries. It does not restrict
+which sources a search can return or provide an authorization boundary. Keep
+source access restrictions in your application or use separate workspaces.
 
 Postgres and distributed metadata are unsupported. The S3 adapter has not been
 validated against a live service. Automated backup and restore, orphan-blob
@@ -73,6 +79,8 @@ Hosted model calls require provider credentials. ColBERT/PLAID requires a
 separately prepared index. The Modal adapter connects to an authenticated remote
 service, but connecting does not upload sources or build the index. BM25 and
 ColBERT source rankings are not automatically combined by application settings.
+Index creation and initial model loading are separate work from searching an
+already loaded index.
 
 Ordinary answers have no dollar-denominated spending cap. Call and text limits
 constrain work but do not set a provider billing limit. Provider usage is recorded

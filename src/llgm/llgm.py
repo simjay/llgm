@@ -159,6 +159,11 @@ class LLGM:
         The default evidence factory uses the workspace's local lexical index.
         Other retrieval selections require an explicit ``evidence_factory``.
         Construction or user-code failure closes every resource already created.
+
+        Use ``async with LLGM.from_settings(settings) as memory``. Both model
+        IDs must be configured. ``runtime_options`` supplies constructor options
+        such as ``max_depth`` and ``max_steps``. Settings supply storage, providers,
+        retrieval limits, concurrency, and the answer budget.
         """
         from llgm.models import create_model
 
@@ -226,7 +231,17 @@ class LLGM:
         idempotency_key: str | None = None,
         organize: bool = True,
     ) -> IngestionOutcome:
-        """Store an immutable source before optionally discovering and recording its links."""
+        """Store a conversation and optionally discover relationships to other sources.
+
+        :param conversation: Exact turns and optional source metadata to retain.
+        :param idempotency_key: Reuse the source when retrying identical input.
+            Reusing a key with different input raises a conflict.
+        :param organize: Run maintenance after storing the source. False skips
+            model calls for this ingestion. The maintenance policy also applies.
+        :returns: The stored source ID and a separate maintenance outcome.
+            Maintenance failure does not remove the source. Retrying ingestion
+            can run maintenance again even when the source already exists.
+        """
         source = await self.workspace.ingest(conversation, idempotency_key=idempotency_key)
         maintenance = await self.organize([source.node_id], disabled=not organize)
         return IngestionOutcome(source, maintenance)
@@ -387,11 +402,27 @@ class LLGM:
         budget: Budget | None = None,
         node_id: str | None = None,
     ) -> AnswerResult:
-        """Collect seed branches under one budget, then ask the root for a cited answer.
+        """Read relevant sources and combine their findings into a cited answer.
 
-        ``as_of_ms`` selects journal validity in Unix milliseconds. ``query_date``
-        is optional original date text for the model and never implies a machine
-        instant. An explicit node is the sole seed and bypasses initial search.
+        :param question: Nonempty question text.
+        :param scope: Values used to select applicable journal amendments and
+            edges, for example ``{"env": "production"}``. This does not restrict
+            source search or provide an access-control boundary.
+        :param query_date: Original date text supplied as context to the models.
+            It does not set a machine instant or imply ``as_of_ms``.
+        :param as_of_ms: Evidence validity instant in integer Unix milliseconds.
+            This does not reconstruct a historical workspace snapshot.
+        :param budget: Complete budget for this answer, replacing the application
+            budget. Omit to use ``memory.inference_budget``. Use
+            ``dataclasses.replace`` to change only selected limits.
+        :param node_id: Start at this source alone and skip initial retrieval.
+            Its delegate can still search and follow links.
+        :returns: Answer text, canonical evidence references, execution status,
+            usage, and trace. Inspect ``result.evidence.unresolved`` for gaps.
+
+        Invalid arguments, preparation errors, unexpected errors, and cancellation
+        can raise instead of returning a result. Completion records execution
+        status, not an independent judgment of answer correctness.
         """
         if not isinstance(question, str) or not question.strip():
             raise ConfigurationError("question must be nonempty text")

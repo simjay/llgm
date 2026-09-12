@@ -1,254 +1,219 @@
 # Architecture
 
-This tutorial follows an answer through LLGM. It builds on the fictional Atlas
-project from [concepts](concepts.md): Database records the original database choice,
-Update changes that choice, Backups gives the retention period, and Registry
-records the deployment region.
+Your application calls `LLGM.ingest()` to store a conversation and
+`LLGM.answer()` to ask a question. This tutorial follows what happens between
+those calls and the returned result.
 
-Your application uses `LLGM` to store conversations and ask questions. Models
-choose what to read and what to conclude. The library supplies the stored text,
-applies explicit amendments, enforces limits and tracks citations.
+We will use the team conversations from [concepts](concepts.md): Database
+records the database choice, Backups records retention, and Registry records
+the hosting region. A later Update conversation changes the database choice.
 
-## Set up the parts your application uses
+## The parts your application owns
 
-Four objects determine most of the behavior:
-
-| Object | What it controls |
+| Object | Responsibility |
 | --- | --- |
-| `Workspace` | Stored conversations, relationships and journals. |
-| `Settings` | Storage and model configuration. |
-| `Budget` | Limits on work performed for one answer. |
-| `LLGM` | Ingestion, optional organization and answering. |
+| `Workspace` | Stores original conversations, directed edges and journals. |
+| `Settings` | Selects storage, model providers and runtime limits. |
+| `Budget` | Limits the work performed for one answer. |
+| `LLGM` | Coordinates ingestion, optional organization and answering. |
 
-`LLGM.from_settings()` creates a workspace and model clients from your settings.
-Using it as an async context manager also closes those resources when you leave
-the block. If you construct `LLGM` with your own workspace and clients, your
-application is responsible for closing them.
+`LLGM.from_settings()` creates the workspace and model clients. Use its async
+context manager to close those resources when the application is done with
+that instance. If you pass your own workspace and clients to `LLGM`, your
+application owns and closes them. See
+[resource ownership](configuration.md#own-directly-constructed-clients).
 
-The default answer runtime uses Docker to run the Python written by delegates.
-The model calls can use hosted providers. This separates where a model generates
-instructions from where those instructions execute. See the
-[quickstart](quickstart.md) for the prerequisites and a complete program.
+The default answer pipeline runs model-written Python in Docker interpreters.
+Generation can run through hosted model providers. Your machine runs the
+interpreters and storage access, while the configured provider runs the model.
+The [quickstart](quickstart.md) has the prerequisites and a complete program.
 
-## Store and organize the conversations
+## Store first, then organize
 
-Calling `LLGM.ingest()` first saves a conversation as an immutable source.
-Store Database, Update, Backups and Registry separately so each has its own
-identity and original text. A later observation needs a new node. Reusing an
-existing ID with different content raises a conflict.
+`ingest()` saves the original conversation before attempting to organize it.
+Each source has its own identity. Submitting different content under an existing
+node ID raises a conflict rather than replacing the stored conversation.
 
-After saving the source, ingestion can ask a maintenance model to find related
-nodes and propose edges. For example, it might connect Database to Registry
-because both describe the Atlas deployment. `MaintenancePolicy` controls this
-step:
+Organization asks a maintenance model for relationships to other nodes. For
+example, it might connect Database to Registry because both describe the same
+deployment. `MaintenancePolicy` controls what happens to those proposals:
 
 | Mode | Behavior |
 | --- | --- |
-| `validated` | Publish proposals whose references and relationship types pass the configured checks. This is the default. |
+| `validated` | Publish proposals that pass reference and allowed-relationship checks. This is the default. |
 | `propose` | Return proposals for your application to review. |
 | `disabled` | Skip relationship discovery. |
 
-These checks establish that a proposal has valid references and an allowed
-relationship type. The model can still misunderstand the relationship.
+A valid reference and an allowed relationship label do not establish that the
+model understood the relationship correctly. The ingestion result reports
+storage and maintenance separately. A maintenance failure leaves the source
+saved.
 
-The ingestion result reports source storage and maintenance separately. If
-maintenance fails, the source stays saved. `ingest(..., organize=False)` skips
-that step for one call. You can use `organize()` later. Retrying ingestion may
-run maintenance again, even when the source was already saved.
-
-Explicit journal amendments are separate from this edge discovery. An amendment
-on Database can point to Update as the replacement for the PostgreSQL statement.
-Ordinary automatic organization does not create that amendment.
+Use `ingest(..., organize=False)` to skip organization for one call, or call
+`organize()` later. Retrying ingestion can run maintenance again even if the
+source was already saved. These operations discover edges. Your application
+records exact journal amendments separately.
 
 ## How an answer runs
 
-For the question "Which database does Atlas production use, and how long are
-backups kept?", the flow is:
+Consider this question:
+
+> Which database does production use, and how long are backups kept?
 
 ```{mermaid}
+%%{init: {'flowchart': {'rankSpacing': 24, 'nodeSpacing': 24}}}%%
 flowchart TD
-    Question[Your question] --> Search[Search passages and choose seed nodes]
-    Search --> Database[Delegate reads Database]
-    Search --> Backups[Delegate reads Backups]
-    Database --> Child[Optional query to another node]
+    Question[Question] --> Seeds[Search and select starting nodes]
+    Seeds --> Database[Database delegate]
+    Seeds --> Backups[Backups delegate]
+    Database --> Child[Optional child query]
     Child --> Database
-    Database --> Evidence[Selected excerpts and findings]
-    Backups --> Evidence
-    Evidence --> Root[Root writes the answer]
-    Root --> Result[Answer, references and unresolved needs]
+    Database --> Root[Root combines evidence and findings]
+    Backups --> Root
+    Root --> Result[Answer and evidence]
 ```
 
-### 1. Find starting nodes
+### 1. Choose the starting nodes
 
-LLGM retrieves ranked passages before making an inference model call. It then
-walks that ranking and selects distinct node owners until it reaches
-`max_seed_nodes`.
+The library searches passages, then selects their distinct owning nodes in
+ranking order. These starting nodes are called seeds. With a limit of two,
+a ranking of Database, Database, Backups and Registry selects Database and
+Backups.
 
-If the top passages belong to Database, Database, Backups and Registry, a seed
-limit of two selects Database and Backups. Multiple high-ranking passages
-from Database do not consume both slots. The selector does not add their
-passage scores into a new node score.
+`retrieval_k` limits the passage pool and `max_seed_nodes` limits the number
+of starting nodes. Passing `answer(..., node_id=...)` bypasses this search and
+uses the named node as the only seed. The [node search guide](node-search.md)
+explains how to tune selection and inspect skipped nodes.
 
-`retrieval_k` controls how many passage hits enter this selection. It is separate
-from the seed limit. Passing `answer(..., node_id=...)` bypasses initial search
-and supplies that node as the only seed. The
-[node search guide](node-search.md) explains this stage in more detail.
+### 2. Read each seed locally
 
-### 2. Start a delegate for each selected node
+Every selected seed gets a node delegate. `max_concurrency` limits concurrent
+seed branches, so additional branches wait for a slot.
 
-Every selected seed gets a delegate. `max_concurrency` limits how many seed
-branches can run at once, so extra branches wait for a slot.
+A delegate starts with the question, references, a small page of turn metadata
+and the node's complete operational journal. The metadata provides speaker
+roles and coordinates for choosing spans. It does not contain the conversation's
+full text.
 
-Each delegate starts with the question, source references, a small page of turn
-metadata and the node's complete operational journal. The metadata gives turn
-roles and coordinates for choosing what to read. It does not contain the full
-conversation text.
+The delegate writes Python to read evidence and print observations. Its
+interpreter can hold data without putting all of it into the model's context.
+Database's delegate can read the database choice while Backups' delegate reads
+the retention period.
 
-The delegate writes Python to request source slices and print observations.
-It can keep data in its interpreter without putting all of it into the model's
-context. In the example, Database's delegate reads the database choice with its
-applicable amendment, while Backups' delegate reads the retention period.
+Before returning a source span, LLGM applies relevant journal amendments. If
+Database's PostgreSQL statement has an explicit replacement pointing to Update,
+an effective read returns the MySQL text with Update's reference. Unchanged
+text keeps its original references.
 
-Reading a small span limits how much text reaches the model. The current storage
-adapter still loads the owning source into application memory to resolve that
-span. A large source can therefore require substantial application memory even
-when the delegate prints only a short excerpt.
+### 3. Ask another node when needed
 
-### 3. Investigate a related node when needed
+Inside a delegate's interpreter, `edges()` lists applicable outgoing
+relationships and `search()` finds additional references. The delegate can read
+a reference directly or call `query_node(node_id, question)` to start a child.
 
-Inside the interpreter, `edges()` exposes relationships and their target nodes.
-`search()` can find more source references. A delegate can read a reference
-directly, or use `query_node(node_id, question)` to start a child delegate for
-a focused investigation.
+For a question that also asks about the hosting region, Database could ask
+Registry a focused question. The child uses the same reading mechanism and
+returns selected findings, evidence and unresolved needs to its parent. Its
+Python variables stay in its interpreter, and its model messages stay local to
+that child in the host runtime.
 
-If the question also asks for the deployment region, Database's delegate could
-query Registry. The child uses the same reading mechanism and returns selected
-findings, excerpts and unresolved needs to its parent. Its Python variables and
-working messages remain local. Only `query_node` starts a child. Looking up an
-edge does not start another model by itself.
+Only `query_node()` starts a child. Searching or inspecting an edge does not
+start one automatically. Children share the answer's budget. There is no
+requirement to visit every connected node or to construct a separate graph
+before answering.
 
-All children share the answer's limits. A stored edge is a route for finding
-evidence, not a requirement to visit every connected node. No separate runtime
-graph has to be built or stored before answering.
+The [walkthrough](walkthrough.md#choose-a-related-node) shows these interpreter
+operations and distinguishes them from application Python.
 
-The [evidence walkthrough](walkthrough.md) shows the delegate's read and query
-operations in a working example.
+### 4. Combine the returned evidence
 
-### 4. Return evidence to the root
+The root receives exact excerpts selected by the branches, with source
+references and available speaker and date metadata. Branch summaries follow those
+excerpts. Retrieved or read passages that a branch did not return are not
+available to the root.
 
-Each seed branch returns selected findings with exact supporting excerpts.
-The root receives those excerpts with speaker roles, dates and source
-references, followed by the branch summaries. It does not receive every
-passage that was retrieved or read along the way.
+The root makes one final model call. It has no further tool phase in the
+current `LLGM` pipeline. If no branch returns the backup policy, the root has
+no supported retention period to use.
 
-The root makes one final model call to combine the returned evidence. In the
-current `LLGM` pipeline, that call has no further query phase. If neither a seed
-nor a child returned the backup policy, the root has no supported retention
-period to use.
+The library checks that the root's citations identify evidence returned by a
+branch. It cannot establish that the cited text supports every claim in the
+answer.
 
-The library checks that cited evidence was returned by a branch and resolves
-its references to the stored sources. It cannot establish that a quotation
-supports every claim the root makes.
+### 5. Check the outcome
 
-### 5. Handle the result
+`AnswerResult` includes answer text, evidence references, unresolved needs,
+usage and an execution trace. Check its status before treating the work as
+complete.
 
-`AnswerResult` contains the answer, evidence references, unresolved needs,
-usage and a trace of execution. Read the status alongside the answer text.
-A fluent answer can still be partial.
+For example, Database may return the database choice while Backups fails before
+reading its policy. Successful findings remain available, and unrecovered
+failures remain visible. Another branch can resolve a delegate's missing-fact
+note, but the root cannot silently remove a required failure report.
 
-For example, Database might establish the database choice while Backups' delegate
-fails before reading the policy. The successful findings remain available, and
-the failed work is recorded. The result may establish MySQL while leaving
-retention unresolved. A delegate's local missing-fact note can be resolved by
-another branch. An unresolved amendment or unrecovered operation failure remains
-visible in the result even if the root omits it from its prose.
+An empty search produces a partial result without starting delegates. Nodes
+skipped by the initial seed limit also make the result partial. The
+[quickstart](quickstart.md#understand-the-result) shows result handling, including
+budget exhaustion and explicit abstention.
 
-An empty retrieval has no starting evidence and produces a partial result.
-An explicit abstention can also have empty answer text with an explanation.
-See [result handling](quickstart.md#understand-the-result) for application code.
+## Understand the limits on work and storage
 
-## Keep work within a budget
+Seeds and children share one `Budget`. Increasing the number of seeds does
+not increase that budget. More branches leave less available work per branch
+unless you also raise the limits.
 
-Seeds and their children share one `Budget`. More seeds give the system more
-places to investigate, but leave less work available per branch unless you
-also raise the limits.
+The runtime reserves capacity for delegates to return findings and for the root
+to write an answer. A provider failure, interpreter failure or expired deadline
+can still prevent completion. Required journals and selected evidence must fit
+their limits. The runtime reports a size problem rather than silently cutting
+those records to fit.
 
-The runtime reserves capacity for delegates to return their findings and for
-the root to write the answer. Those reservations use the existing budget.
-They do not guarantee completion when a provider fails, Docker stops or the
-deadline expires.
+These limits control model calls, evidence, context and time. They do not impose
+a dollar spending cap. See [runtime limits](configuration.md#runtime-limits-and-usage)
+for the units and usage fields.
 
-Evidence and model context also have size limits. If a required journal or
-selected evidence return is too large, the runtime reports the problem instead
-of silently cutting it to fit. These work limits do not enforce a dollar
-spending cap. See [runtime limits](configuration.md#runtime-limits-and-usage)
-for the configurable units and usage fields.
+Small model inputs also do not guarantee small storage reads. Resolving a short
+span currently loads its owning source into application memory. Operational
+journals are loaded in full, and retained source and journal history can keep
+growing on disk.
 
-## Read updates while preserving their sources
+## Understand what a query sees
 
-Before returning source text, the evidence reader applies explicit journal
-amendments that match the query's scope and time. A replacement of Database's
-PostgreSQL statement returns the selected MySQL text from Update with Update's
-reference. Unchanged parts of Database keep their original references.
+Reads use currently stored evidence. New appends can become visible during an
+answer. The query is not a snapshot of the workspace at the moment it started.
 
-Missing replacement text, overlapping amendments and replacement cycles leave
-an unresolved result. The reader does not silently present overwritten text
-as current when the amendment cannot be resolved. The full journal history
-remains available, and `Workspace.resolve()` can still inspect the original
-source.
+`as_of_ms` selects declared validity periods for edges and amendments. It does
+not reconstruct an earlier version of the workspace. `query_date` is separate
+human-readable date text for the model and does not set that machine-readable
+selector.
 
-The operational journal removes redundant working entries while retaining the
-history. It has a finite size limit, so a journal that cannot fit fails
-explicitly. This does not bound the amount of history stored on disk.
+Missing replacement evidence, overlapping amendments and replacement cycles
+leave unresolved evidence. The reader does not silently use an overwritten
+value as current when its replacement cannot be resolved.
+`Workspace.resolve()` still reads the original stored source. The
+[correction walkthrough](walkthrough.md#follow-an-update-and-a-correction)
+demonstrates the difference with scope and time.
 
-Queries read currently stored evidence. They can observe new appends while
-running. `as_of_ms` selects explicitly declared validity periods, but it does
-not reconstruct the workspace as it existed at an earlier moment. Human date
-text in `query_date` is separate from that machine-readable time selector.
-See [updates and corrections](walkthrough.md#follow-an-update-and-a-correction)
-for an example with scope and time.
+## Replace one component at a time
 
-## Replaceable interfaces
-
-Start with the default components, then replace the part your application needs:
-
-| Interface | Purpose |
+| Interface | What you can replace |
 | --- | --- |
-| `ModelClient.complete()` | Call a generation model through a provider adapter. |
-| `Retriever.search()` | Rank source passages for a query. |
-| `BlobStore.put()` and `BlobStore.get()` | Store and retrieve immutable source bytes. |
+| `ModelClient.complete()` | Generation through a different model provider. |
+| `Retriever.search()` | Passage ranking for the stored evidence. |
+| `BlobStore.put()` and `BlobStore.get()` | Storage of immutable source bytes. |
 
-The default retriever uses a local SQLite FTS5 index. It reuses the index and
-refreshes it for new evidence. The first build still reads existing sources,
-and storage and search costs grow with the corpus.
+The default retriever uses a reusable SQLite FTS5 index. It refreshes newly
+published evidence. Its first build reads existing sources, and corpus growth
+still increases storage and indexing work.
 
-To attach a different retriever to `LLGM`, supply an async `evidence_factory`
-that opens evidence access for the workspace. Returned source references must
-belong to that workspace. LLGM resolves their text from the original stored
-sources and keeps local journal retrieval available. Injected retrievers remain
-owned by your application. See
-[custom search](quickstart.md#use-your-own-search-backend).
+A custom retriever enters through an async `evidence_factory`. Its references
+must resolve to evidence in the workspace. LLGM uses the stored text when
+reading those references and keeps local journal retrieval available. Your
+application owns the injected retriever and keeps its index up to date. See
+[custom search](configuration.md#use-your-own-search-backend).
 
-The optional Modal ColBERT adapter sends queries to a remote GPU service. Index
-construction is a separate explicit operation. Connecting the retriever does
-not upload the workspace or build an index. The
-[search guide](node-search.md) explains when to use this backend.
-
-## Execution mechanisms
-
-`LLGM` uses `NodeRuntime` for the pipeline described above. The package also
-exposes lower-level executors for applications that need to supply their own
-context or control retrieval directly:
-
-| Executor | What it runs |
-| --- | --- |
-| `NodeRuntime` | Seed delegates, recursive Python investigation and final root synthesis. |
-| `RecursiveRuntime` | Structured node operations expressed as JSON. |
-| `IterativeRuntime` | Retrieval under a caller-supplied search policy. |
-| `RLMRuntime` | Recursive Python queries over caller-supplied context. |
-
-These are separate interfaces with different operations and stopping rules.
-They are not modes selected through `LLGM` settings. Their callers own the
-model clients they supply. The
-[advanced API](../reference/api.md#specialized-execution-interfaces)
-documents their signatures.
+`LLGM` uses `NodeRuntime` for the pipeline described here. The
+[advanced API](../reference/api.md#specialized-execution-interfaces) also exposes
+lower-level execution interfaces for applications that supply their own context
+or retrieval policy. They have separate contracts and are not settings that
+change the default answer pipeline.

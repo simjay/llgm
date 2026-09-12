@@ -79,8 +79,8 @@ async def main():
             )
             sources = {}
             texts = {
-                "database": "Atlas production database uses PostgreSQL. Staging uses SQLite.",
-                "backups": "Atlas production backups are retained for seven days.",
+                "database": "The production database uses PostgreSQL. Staging uses SQLite.",
+                "backups": "Production backups are retained for seven days.",
                 "registry": "The deployment registry says eu-west-1.",
                 "update": "MySQL",
             }
@@ -110,7 +110,7 @@ async def main():
                 applicability={"scope": {"env": "production"}},
             )
             result = await memory.answer(
-                "Atlas production database, backups, and region",
+                "Production database, backups, and region",
                 scope={"env": "production"},
                 as_of_ms=parse_instant_ms("2026-09-11T00:00:00Z"),
             )

@@ -143,7 +143,7 @@ class Evidence:
         return await self.workspace.source(node_id)
 
     def descriptor(self) -> dict[str, Any]:
-        """Report the local scorer and current-read semantics separately from benchmarks."""
+        """Report the active scorer and current-read semantics."""
         self._ensure_open()
         return {
             **self._index.descriptor(),

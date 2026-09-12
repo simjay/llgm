@@ -1,156 +1,155 @@
 # Node search
 
-Suppose you have stored hundreds of conversations about Atlas, a fictional
-project. You ask, "Which database does Atlas use in production?" LLGM needs a
-few useful places to start reading.
-It searches small passages, then selects the nodes that contain those passages.
-Those starting nodes are called *seeds*.
+When you ask, "Which database does production use?", LLGM first needs useful
+places to read. It searches passages and selects the conversations that own
+them. Those starting conversations are called **seed nodes**.
 
-Each seed receives a smaller-model reader called a *node delegate*. The delegate
-reads relevant evidence and returns findings to the root model, which writes
-the answer. A passage search result points to possible evidence. The delegate
-still needs to inspect and interpret it.
+This page explains that selection rule, the settings that affect it, and how
+to tell whether search missed needed evidence. The later model calls are
+covered in [architecture](architecture.md#how-an-answer-runs).
 
-```{mermaid}
-flowchart LR
-    Q[Question] --> P[Find passages]
-    P --> N[Choose nodes]
-    N --> R[Read evidence]
-```
+## Follow a passage ranking
 
-## The current selection rule
-
-The default search uses BM25 in a local SQLite FTS5 index. BM25 ranks passages
-by matching the question's words against stored text. The index includes source
-passages and inline journal notes, and updates as workspace records are
-published. The initial search and node selection make no model calls.
+The default retriever uses BM25 in a local SQLite FTS5 index. BM25 ranks text
+using word matches. The index includes source passages and inline journal
+notes, and refreshes as workspace records are published. This default search
+and seed selection make no model calls.
 
 Selection follows four steps:
 
 1. Retrieve up to `retrieval_k` passages for the original question.
-2. Follow the passage ranking and select the first `max_seed_nodes` distinct
-   source nodes. Repeated hits from one node do not increase its priority.
-3. Give each selected delegate every distinct matching reference for its node
-   from the returned pool. Exact duplicate references are removed. Overlapping
-   spans remain separate.
-4. Record the remaining source nodes as skipped because of the seed limit.
+2. Walk that ranking and select the first `max_seed_nodes` distinct owners.
+3. Give each selected node all of its distinct matching references from the
+   returned pool. Remove exact duplicates, but keep overlapping spans separate.
+4. Record other owners in the pool as skipped because of the seed limit.
 
-For example, imagine this ranking:
+For example, suppose the question asks about the database and its backups,
+and the ranking is:
 
-| Passage rank | Node containing the passage | Selection at a three-node limit |
+| Passage rank | Owning conversation | Selection with a three-node limit |
 | --- | --- | --- |
-| 1 | Database | Start a Database delegate |
-| 2 | Database | Add a reference to the same delegate |
-| 3 | Backups | Start a Backups delegate |
+| 1 | Database | Select Database |
+| 2 | Database | Add a reference to Database |
+| 3 | Backups | Select Backups |
 | 4 | Database | Add another reference to Database |
-| 5 | Registry | Start a Registry delegate |
+| 5 | Registry | Select Registry |
 | 6 | Deployment notes | Record this node as skipped |
 
-Database receives three references and one delegate. No model reranks these
-starting nodes. The delegates choose how to investigate after selection.
+Database gets three references and one delegate. Its repeated hits do not
+consume additional seed slots or combine into a new node score. No LLM reranks
+the initial seeds. The selected delegates decide what to read afterward.
 
-## Adjust the starting work
+## Choose how much to retrieve
 
-| Setting | Default | Meaning |
+| Setting | Default | Effect |
 | --- | ---: | --- |
-| `retrieval_k` | 12 | Initial passage limit, at most 40 |
+| `retrieval_k` | 12 | Maximum initial passage hits, up to 40 |
 | `max_seed_nodes` | 3 | Maximum starting nodes, no greater than `retrieval_k` |
-| `max_concurrency` | 3 | Maximum concurrent seed branches and model calls |
-| `passage_chars` | 2,048 | Default local passage character limit, supplied as a runtime option |
-| `max_searches` | 8 | Maximum search calls across the answer, including initial retrieval |
+| `max_concurrency` | 3 | Limit on concurrent seed branches and on concurrent model calls |
 
-The first three settings also have `LLGM_` environment variables, as does
-`LLGM_MAX_SEARCHES`. See [configuration](configuration.md) for settings precedence
-and budget units.
+These settings have matching `LLGM_` environment variables. For example,
+`LLGM_RETRIEVAL_K=20` expands the initial pool to at most twenty passages.
+See [configuration](configuration.md) for loading settings in your application.
 
-Increasing `retrieval_k` can expose more references without changing the selected
-nodes. In the example, retrieving more lower-ranked passages still starts with
-Database, Backups, and Registry. Increase `max_seed_nodes` to allow more starting
-nodes. Excess branches wait if there are more selected seeds than concurrency
-slots.
+Increasing the passage limit does not necessarily change the seeds. In the
+ranking above, a larger pool still starts with Database, Backups and Registry.
+It may give them more references. Raise `max_seed_nodes` if you want to admit
+additional conversations. Selected branches beyond `max_concurrency` wait
+for a slot.
 
-All branches share one inference budget. Allowing more starting nodes adds work
-without increasing that budget automatically. See [configuration](configuration.md)
-for model-call, context, and time limits.
+All branches share one answer budget. More seeds add work without automatically
+raising the model-call, context or time allowances.
 
-If you already know where to start, `answer(question, node_id=...)` uses that
-node as the sole seed and skips initial retrieval. The delegate receives turn
-metadata and references, then uses Python to read selected spans. The
-[walkthrough](walkthrough.md#inspect-a-large-node-without-printing-it-all)
-shows those reads.
+Two other controls affect search:
 
-## What the retriever changes
+- `passage_chars` sets the default local passage size, in characters. It defaults
+  to 2,048 and is a Python runtime option, not an environment setting.
+- `max_searches` limits search calls across the whole answer. Its default of
+  eight includes the initial retrieval. Set it through the answer budget or
+  `LLGM_MAX_SEARCHES`.
 
-The retriever decides which passages enter this process and in what order.
-Changing it keeps the same node-selection rule and delegate workflow.
+If you already know which node to investigate, pass `node_id` to `answer()`.
+That node becomes the sole seed and initial retrieval is skipped. The delegate
+still chooses what to read within it.
 
-BM25 uses word matches. ColBERT compares query tokens with passage tokens using
-learned vectors, which can capture similarities beyond matching words.
-PLAID is a search engine for ColBERT representations. It reduces the work needed
-to find promising passages in an index. LLGM's official adapter uses ColBERTv2
-with PLAID. See the [ColBERTv2 paper](https://aclanthology.org/2022.naacl-main.272/)
-and [PLAID paper](https://arxiv.org/abs/2205.09707) for the underlying methods.
+## Choose a retrieval method
 
-| Option | Current integration |
+Changing the retriever changes the passage ranking. It keeps the same seed
+selection rule and delegate workflow.
+
+BM25 works from word matches. ColBERT compares learned vectors for query tokens
+and passage tokens, allowing matches beyond identical words. PLAID is the
+search engine used to find promising passages efficiently in a ColBERT index.
+LLGM's official adapter uses the released ColBERTv2 model with PLAID.
+
+| Option | How it connects to LLGM |
 | --- | --- |
 | Local BM25 | Default workspace index, refreshed from new publications |
 | Official ColBERTv2 and PLAID | Optional local adapter or authenticated Modal transport over an explicitly prepared index |
 | Lexical and dense hybrid | `HybridRetriever` combines passage rankings over matching corpora |
-| BM25 and ColBERT together | Requires a caller-supplied composite retriever. No built-in application setting combines them |
+| BM25 and ColBERT together | Requires a caller-supplied composite retriever. There is no built-in application setting for this combination |
 
-To use an external retriever, provide it through `evidence_factory` and keep its
-index up to date. Setting a backend name alone does not build or deploy an index.
-Returned references must point to evidence in the workspace. LLGM resolves the
-stored text before using it as evidence. See
-[custom retrieval](quickstart.md#use-your-own-search-backend) for the interface.
+Supply a custom retriever through `evidence_factory`. A backend name alone
+does not build or deploy an index. Your application maintains the index and
+provides references that resolve in the workspace. LLGM reads their text from
+the stored evidence. See
+[custom retrieval](configuration.md#use-your-own-search-backend).
 
-Inline journal notes remain searchable locally when you supply an external
-source retriever. Their ranking may be combined with external results. That
-does not combine BM25 and ColBERT searches over source text.
+With an external source retriever, inline journal notes remain searchable in
+the local index. Their ranking can be combined with external results. That
+local journal search is separate from combining BM25 and ColBERT over source
+passages.
 
-A ColBERT worker may need to load its model and index before its first search.
-This startup delay is called a *cold start*. Later searches may be faster
-because the worker reuses the loaded model and index.
+A ColBERT worker may need to load its model and index before serving its first
+search. This startup delay is a **cold start**. Later searches can reuse the
+loaded state. Connecting the Modal adapter does not upload the workspace or
+build a remote index.
 
-## How discovery continues
+For the underlying methods, see the [ColBERTv2 paper](https://aclanthology.org/2022.naacl-main.272/)
+and [PLAID paper](https://arxiv.org/abs/2205.09707).
 
-A Database delegate might discover that the deployment region lives elsewhere.
-It has three ways to continue:
+## Find more evidence after selection
 
-| Operation inside the delegate | What it does |
+The seeds determine where investigation starts, not every node it may reach.
+Inside its interpreter, a delegate can use these operations:
+
+| Operation | Effect |
 | --- | --- |
-| `search("Atlas deployment region", k=5)` | Finds more candidate references using the answer's configured search backend |
-| `edges()` | Lists applicable relationships and their target nodes |
-| `query_node(node_id, question)` | Starts a child delegate to investigate a node and return selected findings |
+| `search("production hosting region", k=5)` | Find more candidate references with the configured retrieval backend |
+| `edges()` | Inspect applicable outgoing relationships and their targets |
+| `query_node(node_id, question)` | Ask a child delegate to investigate a node |
 
-Search and edge inspection do not start children automatically. The delegate
-can read a discovered target directly or ask a child to investigate it. Search
-can reach any node in the configured index. It consumes the shared search
-allowance and accepts at most forty hits per call.
+These are delegate-interpreter operations, not functions to import into your
+application. The [walkthrough](walkthrough.md#choose-a-related-node) shows them
+in context.
 
-The root receives the delegates' selected source quotes and findings for one
-final synthesis call. It has no further tool phase. The initial seeds limit
-where reading starts, while follow-up discovery can reach more sources before
-synthesis. See [the answer lifecycle](architecture.md#how-an-answer-runs).
+Search can reach any node in the configured index, including nodes without an
+edge from the current node. It uses the shared search allowance and accepts
+at most forty hits per call. Searching or inspecting edges does not start
+children automatically. A delegate can also read a discovered reference directly.
 
-## Diagnose the stage that lost the evidence
+The root gets the selected findings and source quotes after investigation.
+It has one final synthesis call and no further search phase.
 
-| Observation | Where to investigate |
+## Diagnose missing evidence
+
+Inspect `result.trace` for a `seed_selection` event. It reports selected and
+skipped nodes. Later node operations, reads and branch returns show what
+happened after selection.
+
+| Observation | What to inspect |
 | --- | --- |
-| Useful source missing from search results | Question wording, search backend, passage size, and retrieval limit |
-| Useful source found but skipped | The starting-node limit and the order of passage results |
-| Node selected, but its useful turn was not read | The delegate's initial and follow-up reads |
-| Fact read but omitted from the delegate's return | The delegate's choice of findings and its message limits |
-| Fact returned but used incorrectly | The root's interpretation of scope, dates, and quantities |
-| Correct claim missing its citation | Whether the final answer cites the supporting evidence |
+| Useful conversation absent from the returned pool | Question wording, backend, passage size and retrieval limit |
+| Useful conversation found but skipped | Seed limit and passage ranking |
+| Node selected, useful turn never read | Delegate's initial and follow-up reads |
+| Fact read but absent from branch findings | Delegate's evidence selection and return limits |
+| Fact returned but used incorrectly | Root's interpretation of scope, dates and quantities |
+| Answer missing a supporting reference | Final citation selection |
 
-Inspect `result.trace` for the `seed_selection` event. It lists selected and
-skipped nodes. Subsequent node operations, evidence reads, and branch returns
-help locate later losses.
-
-A node skipped because of the seed limit makes the answer `partial`, even if
-the answer text appears complete. Empty retrieval also produces a partial
-result. Inspect `result.evidence.unresolved`, the answer, and its references
-together. Valid references locate source text but do not prove that the text
-supports the model's claim. See [capabilities and limits](../reference/implementation-status.md)
-for practical constraints.
+A node skipped because of the seed limit makes the current pipeline's result
+`partial`, even if a later read reaches it or the answer text appears complete.
+Empty retrieval also produces a partial result. Read
+`result.evidence.unresolved`, the answer and its references together. Valid
+references identify source text but do not prove that it supports the model's
+claim. See [capabilities and limits](../reference/implementation-status.md)
+for the other result constraints.
