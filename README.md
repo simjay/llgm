@@ -21,7 +21,7 @@
   <a href="https://github.com/simjay/llgm/blob/main/CONTRIBUTING.md">Contributing</a>
 </p>
 
-**LLGM stands for Large Language Graphical Model.** It is a Python library that
+**LLGM (Large Language Graphical Model)** is a Python library that
 gives language models a persistent collection of conversations to investigate.
 It keeps the original words, connects related conversations, and lets models
 work through the evidence before answering.
