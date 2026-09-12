@@ -226,6 +226,55 @@ class IncrementalEvidenceTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await second.close()
 
+    async def test_index_initialization_retries_only_busy_within_the_connection_timeout(self):
+        """Transient WAL contention recovers, while other errors and expired waits stay explicit."""
+        await self.source("a", "cobalt source")
+        connect = sqlite3.connect
+        cases = ((sqlite3.SQLITE_BUSY, 30), (sqlite3.SQLITE_IOERR, 30), (sqlite3.SQLITE_BUSY, 0))
+        for width, (code, timeout) in enumerate(cases, start=2048):
+            with self.subTest(code=code, timeout=timeout):
+                attempts, connections = [], []
+
+                class FirstPragmaFailure(sqlite3.Connection):
+                    """Inject one WAL failure around a real derived-index connection."""
+
+                    def execute(self, sql, *args, **kwargs):
+                        """Fail only the first journal-mode change with the chosen SQLite code."""
+                        if sql.replace(" ", "") == "PRAGMAjournal_mode=WAL":
+                            attempts.append(sql)
+                            if len(attempts) == 1:
+                                error = sqlite3.OperationalError("injected index WAL failure")
+                                error.sqlite_errorcode = code
+                                raise error
+                        return super().execute(sql, *args, **kwargs)
+
+                def connection(*args, **kwargs):
+                    """Keep real SQLite storage and select the wait allowance for this case."""
+                    kwargs["timeout"] = timeout
+                    opened = connect(*args, **kwargs, factory=FirstPragmaFailure)
+                    connections.append(opened)
+                    return opened
+
+                with patch("llgm.storage.lexical.sqlite3.connect", side_effect=connection):
+                    if code == sqlite3.SQLITE_BUSY and timeout:
+                        evidence = await self.open(passage_chars=width)
+                        self.assertEqual(len(await evidence.search("cobalt")), 1)
+                        self.assertEqual(len(attempts), 2)
+                        self.assertEqual(
+                            connections[0].execute("PRAGMA busy_timeout").fetchone()[0],
+                            timeout * 1000,
+                        )
+                    else:
+                        with self.assertRaises(sqlite3.OperationalError) as raised:
+                            await self.open(passage_chars=width)
+                        self.assertEqual(raised.exception.sqlite_errorcode, code)
+                        self.assertEqual(len(attempts), 1)
+                        with self.assertRaises(sqlite3.ProgrammingError):
+                            connections[0].execute("SELECT 1")
+                if code != sqlite3.SQLITE_BUSY or not timeout:
+                    retry = await self.open(passage_chars=width)
+                    self.assertEqual(len(await retry.search("cobalt")), 1)
+
     async def test_cancelled_open_keeps_refresh_owned_until_workspace_cleanup(self):
         """Cancellation cannot detach the storage worker or close its connection mid-publication."""
         await self.source("a", "cobalt source")

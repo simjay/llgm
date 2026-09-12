@@ -12,6 +12,11 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = []
 
+[project.urls]
+Documentation = "https://llgm.readthedocs.io/"
+Repository = "https://github.com/simjay/llgm"
+Issues = "https://github.com/simjay/llgm/issues"
+
 [project.optional-dependencies]
 openai = ["openai>=2.54,<3"]
 benchmark = ["openai>=2.54,<3", "tiktoken==0.11.0"]
@@ -32,7 +37,7 @@ llgm = "llgm.cli:main"
 packages = ["src/llgm"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/tests", "/docs", "/development", "/examples", "/experiments", "/tools", "/pyproject.toml", "/README.md", "/CONTRIBUTING.md", "/LICENSE", "/Makefile", "/.readthedocs.yaml", "/.github/workflows/ci.yml", "/.github/workflows/colbert.yml", "/.github/workflows/docs.yml"]
+include = ["/src", "/tests", "/docs", "/development", "/examples", "/experiments", "/tools", "/pyproject.toml", "/README.md", "/CONTRIBUTING.md", "/LICENSE", "/Makefile", "/.readthedocs.yaml", "/.github/workflows/ci.yml", "/.github/workflows/colbert.yml", "/.github/workflows/docs.yml", "/.github/workflows/publish.yml"]
 exclude = ["/docs/_build", "/docs/development", "/docs/_static/brand/explorations", "/development/brand-explorations", "/experiments/*.md"]
 
 [tool.pytest.ini_options]

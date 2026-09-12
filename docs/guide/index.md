@@ -1,14 +1,17 @@
 # User guide
 
-Start with [Quickstart](quickstart.md) to run your first answer. For a closer look
-at the storage layer, the [Evidence walkthrough](walkthrough.md) runs without
-model credentials or Docker. Read Concepts and Architecture when you want to
-understand how the pieces fit together.
+LLGM stands for **Large Language Graphical Model**. It stores your conversations,
+connects related ones, and lets model readers investigate the parts that matter
+to a question. Start with [Concepts](concepts.md) for the idea behind that design,
+or [Quickstart](quickstart.md) to store a conversation and ask your first question.
+
+If you want to explore the stored evidence before connecting a model, the
+[Evidence walkthrough](walkthrough.md) runs without credentials or Docker.
 
 | Guide | Purpose |
 | --- | --- |
 | [Quickstart](quickstart.md) | Install the library, create memory, and handle an answer. |
-| [Concepts](concepts.md) | Learn nodes, passages, links, corrections, and model readers through an example. |
+| [Concepts](concepts.md) | See why LLGM keeps conversations in a graph and how model readers use it. |
 | [Architecture](architecture.md) | Follow a question through storage, search, model reading, and final synthesis. |
 | [Node search](node-search.md) | See how passage rankings select starting nodes, and tune or inspect the search. |
 | [Evidence walkthrough](walkthrough.md) | Store and search sources, connect them, and apply a correction with preserved citations. |
@@ -18,10 +21,10 @@ See the [reference](../reference/index.md) for signatures and capability limits.
 
 ## Complete examples
 
-After the tutorials, try these downloadable scripts:
+These scripts show a complete program around the examples in the guides:
 
 - {download}`recursive_memory.py <../../examples/recursive_memory.py>` stores two
-  conversations and answers a question with your configured models. It needs the
+  related notes and answers a question with your configured models. It needs the
   provider setup and Docker image from Quickstart.
 - {download}`offline.py <../../examples/offline.py>` demonstrates two starting
   nodes, a recursive child, and a source correction. It uses scripted model

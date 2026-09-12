@@ -17,13 +17,14 @@ from dataclasses import dataclass, fields, replace
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 
 from llgm.core.config import Settings
-from llgm.core.errors import BudgetExceeded, CapabilityError, ConfigurationError
+from llgm.core.errors import BudgetExceeded, CapabilityError, ConfigurationError, SchemaError
 from llgm.core.time import validate_instant_ms
 from llgm.core.types import (
     Conversation,
     Edge,
     IngestResult,
     NodeRef,
+    Turn,
     reference_to_dict,
 )
 from llgm.inference.budget import Budget, RunLedger, byte_token_bound
@@ -147,7 +148,7 @@ class LLGM:
     @asynccontextmanager
     async def from_settings(
         cls,
-        settings: Settings,
+        settings: Settings | None = None,
         *,
         maintenance_policy: MaintenancePolicy | None = None,
         evidence_factory: Callable[..., Awaitable[Evidence]] | None = None,
@@ -160,13 +161,17 @@ class LLGM:
         Other retrieval selections require an explicit ``evidence_factory``.
         Construction or user-code failure closes every resource already created.
 
-        Use ``async with LLGM.from_settings(settings) as memory``. Both model
-        IDs must be configured. ``runtime_options`` supplies constructor options
+        Use ``async with LLGM.from_settings() as memory`` to read environment
+        settings when the context is entered. An explicit ``Settings`` instance
+        is used unchanged. Both model IDs must be configured.
+        ``runtime_options`` supplies constructor options
         such as ``max_depth`` and ``max_steps``. Settings supply storage, providers,
         retrieval limits, concurrency, and the answer budget.
         """
         from llgm.models import create_model
 
+        if settings is None:
+            settings = Settings.from_env()
         if not all(
             isinstance(getattr(settings, role + "_model", None), str)
             and getattr(settings, role + "_model").strip()
@@ -226,14 +231,17 @@ class LLGM:
 
     async def ingest(
         self,
-        conversation: Conversation,
+        conversation: Conversation | str | Sequence[Mapping[str, Any] | Turn],
         *,
         idempotency_key: str | None = None,
         organize: bool = True,
     ) -> IngestionOutcome:
         """Store a conversation and optionally discover relationships to other sources.
 
-        :param conversation: Exact turns and optional source metadata to retain.
+        :param conversation: A string, a sequence of chat turns, or a
+            ``Conversation`` with source metadata. A string becomes one user
+            turn. Sequences accept ``Turn`` records or mappings with ``role``
+            and either ``text`` or ``content``. Text is preserved exactly.
         :param idempotency_key: Reuse the source when retrying identical input.
             Reusing a key with different input raises a conflict.
         :param organize: Run maintenance after storing the source. False skips
@@ -242,6 +250,16 @@ class LLGM:
             Maintenance failure does not remove the source. Retrying ingestion
             can run maintenance again even when the source already exists.
         """
+        if isinstance(conversation, str):
+            conversation = Conversation.from_turns([{"role": "user", "text": conversation}])
+        elif not isinstance(conversation, Conversation):
+            if (
+                not isinstance(conversation, Sequence)
+                or isinstance(conversation, (bytes, bytearray))
+                or any(not isinstance(turn, (Mapping, Turn)) for turn in conversation)
+            ):
+                raise SchemaError("ingest requires text, a sequence of turns, or a Conversation")
+            conversation = Conversation.from_turns(list(conversation))
         source = await self.workspace.ingest(conversation, idempotency_key=idempotency_key)
         maintenance = await self.organize([source.node_id], disabled=not organize)
         return IngestionOutcome(source, maintenance)

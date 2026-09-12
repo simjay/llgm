@@ -3,22 +3,20 @@
 Requires Docker and its configured local Python image.
 Configure LLGM_ROOT_MODEL, LLGM_SIDECAR_MODEL, provider credentials, and optionally
 LLGM_WORKSPACE_PATH before running, or supply an explicit --env-file path.
-The settings factory owns its connections.
+LLGM opens and closes its workspace and provider connections.
 """
 
 import argparse
 import asyncio
 import json
-from dataclasses import asdict
 
-from llgm import LLGM, Conversation, Settings, load_env_file
+from llgm import LLGM, load_env_file
 from llgm.core.types import reference_to_dict
 
 
 async def main():
-    """Ingest exact notes, maintain their graph, and answer without supplying source handles."""
-    settings = Settings.from_env()
-    async with LLGM.from_settings(settings) as memory:
+    """Store two related notes and ask which region runs the production release."""
+    async with LLGM.from_settings() as memory:
         for source_label, text in (
             (
                 "orion-release",
@@ -30,15 +28,13 @@ async def main():
             ),
         ):
             outcome = await memory.ingest(
-                Conversation.from_turns(
-                    [{"role": "user", "turn_id": "note", "text": text}],
-                ),
-                idempotency_key="example:" + source_label,
+                text,
+                idempotency_key="example:notes:" + source_label,
             )
             print(
                 json.dumps(
                     {
-                        "source": asdict(outcome.source),
+                        "source_id": outcome.source.node_id,
                         "maintenance_status": outcome.maintenance.status,
                         "accepted_edges": len(outcome.maintenance.accepted),
                         "maintenance_usage": dict(outcome.maintenance.usage),

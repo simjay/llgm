@@ -1,13 +1,52 @@
 # Concepts
 
-LLGM helps a language model answer questions from stored conversations. It keeps
-the original text outside the model's prompt, searches for useful evidence, and
-lets models read related conversations before writing an answer.
+LLGM stands for **Large Language Graphical Model**. It explores a way for language
+models to work with a history that is larger than the context they can read at
+once: keep the conversations, connect related evidence, and let local readers
+ask one another focused questions.
 
-This page introduces the pieces through a team's database discussions. The
-[architecture tutorial](architecture.md) then follows a request through the
-library, and the [evidence walkthrough](walkthrough.md) shows the operations in
+The motivation starts with an ordinary experience. A decision made in one
+conversation is qualified in another and changed weeks later. Answering a
+question about that decision requires more than finding a sentence that uses the
+right words. You may need to follow the discussion, distinguish two environments,
+and work out which statement still applies.
+
+Sending the entire history on every question makes the model input grow with
+the archive. A running summary is smaller, but its author has to choose what to
+keep before knowing every future question. Passage search gives you relevant
+excerpts, but the first matches may only point toward the answer. LLGM keeps the
+original evidence available and makes retrieval the beginning of an investigation.
+
+This page develops that idea through a team's database discussions. The
+[architecture tutorial](architecture.md) follows the same example through the
+runtime, and the [evidence walkthrough](walkthrough.md) shows the operations in
 Python.
+
+## Why a graph?
+
+Think of the team's conversations as places where different parts of an answer
+live. The database discussion knows which system was chosen. A deployment
+discussion knows where it runs. A later migration discussion explains what
+changed. Relationships between these conversations give a reader a reason to
+visit one after reading another.
+
+The graphical-model inspiration is **local computation and passing messages
+along relationships**, as developed in
+[factor graphs and the sum-product algorithm](https://www.isiweb.ee.ethz.ch/papers/arch/aloe-2001-1.pdf).
+In LLGM, a local reader investigates one conversation and can ask a reader at
+another conversation for help. It receives a bounded set of findings and source
+excerpts, rather than the other reader's entire working history. A final reader
+combines what the branches established.
+
+These messages contain language-model findings and evidence references. LLGM
+does not define probabilistic factors or perform belief propagation with a
+convergence guarantee. The useful idea is how to divide the reading work while
+keeping its conclusions connected to their sources.
+
+The persistent graph is also distinct from the work done for one question.
+Conversations and their relationships stay in storage. Readers are created when
+needed and finish when they return their findings. A stored conversation does
+not require a model service that runs continuously.
 
 ## Store the conversation
 
@@ -23,18 +62,14 @@ You later ask:
 
 > Which database does production use, and how long are backups kept?
 
-You could send all three conversations to a model. With hundreds of longer
-conversations, that also sends a lot of unrelated text. A model's **context**
-is the text available to it while producing a response, and that context has a
-size limit.
-
 LLGM stores each conversation as a **source node**. A node contains the turns,
 speaker roles and metadata, with an ID that identifies it in storage. The
 Database and Backups names here are labels for the example.
 
 Sources are **immutable**. Their original text stays unchanged after ingestion.
-If the team changes databases later, you store the new conversation as another
-node. You can still inspect what the team said earlier.
+This matters when the team changes databases later. You can add the new decision
+and still recover the earlier statement, who made it, and the conversation
+around it.
 
 ## Find a starting point
 
@@ -56,38 +91,47 @@ A **node delegate** is a model assigned to investigate one node for the question
 The Database delegate looks for the production database. The Backups delegate
 looks for the retention period. Each has its own working context.
 
-A delegate writes short Python instructions to request evidence. LLGM runs the
-instructions in an isolated interpreter and sends the printed observations back
-to the model. The delegate can repeat this process as it decides what to read.
-You configure the model for this work as the **sidecar model**.
+A delegate works in a read, compute and inspect loop. It writes Python to request
+evidence, LLGM runs that code in an isolated interpreter, and the model reads the
+printed observations before choosing its next step. For example, the Database
+reader can inspect production statements without filling its input with a long
+discussion about staging.
+
+This draws on [Recursive Language Models](https://arxiv.org/abs/2512.24601), which
+treat context as something a program can inspect. Text can stay in interpreter
+variables until the delegate prints the portions it wants to consider. The
+model's **context** is its current input, including those printed observations,
+and still has a size limit. You configure the model used for local reading as the
+**sidecar model**.
 
 When a delegate reads text, LLGM retains a **source span** identifying the node,
 turn and character range it came from. That reference lets your application
 trace a quotation back to its original source.
 
 The **root model** receives the delegates' selected excerpts and findings, then
-writes the final answer. You can use a smaller model for repeated reading and
-a stronger model for synthesis, or the same model for both roles.
+writes the final answer. The roles let you choose one model for repeated local
+reading and another for synthesis, or use the same model for both.
 
 ## Connect conversations when one points to another
 
 Now suppose the question also asks where production is hosted. An **edge** from
 Database to Registry records a relationship between those nodes. The edge has
-a direction and a relationship label, such as `deployment_registry`.
+a direction and a relationship label, such as `related_to`.
 
 The Database delegate can inspect that edge and ask a child delegate:
 
 > Which deployment region is recorded in Registry?
 
-The child reads Registry and returns selected findings with their evidence.
-It can ask another node a question in the same way. This is **recursive
-inference**. The child's entire working conversation does not enter its
-parent's context.
+The child reads Registry and returns the region statement with its source
+reference. It can ask another node a question in the same way. This is
+**recursive inference**. The parent receives the selected findings and evidence,
+while the child's intermediate reads and model conversation stay local.
 
-An edge provides a route to evidence. It does not start a model call by itself.
-Delegates can also search for other nodes, so a useful source does not need an
-edge from the initial seed. Delegates exist only while answering. Stored nodes
-do not each need their own running model service.
+An edge provides a route to evidence. The delegate decides whether that route
+helps answer its question. It can also search for other nodes when the existing
+relationships do not lead to what it needs. Search, direct reading and recursive
+questions work together, so each answer does not have to traverse the whole
+graph.
 
 ## Apply a correction without erasing the old statement
 
@@ -100,15 +144,16 @@ its exact PostgreSQL span with the MySQL span from Update. An effective read
 then returns MySQL with Update's reference. The staging statement still says
 SQLite, and the original PostgreSQL text remains available.
 
-An edge from Database to Update would help a delegate find the update, but
-would not apply that replacement. Edges establish relationships. Explicit
-journal amendments change effective reads. Automatic organization currently
-creates relationship proposals, not these exact amendments.
+An edge from Database to Update helps a delegate find the new discussion.
+An explicit journal amendment does something more precise: it tells the reader
+which original span to replace and where to find its replacement. Automatic
+organization currently proposes relationships between nodes. Your application
+records these exact amendments separately.
 
-Before a delegate reads a node, LLGM loads its **operational journal**, the working set
-of entries needed to interpret its evidence. Redundant entries can leave that
-working set while the full journal history remains stored. This does not delete
-old conversations or provide an automatic forgetting policy.
+Before a delegate reads a node, LLGM loads its **operational journal**, the working
+set of entries needed to interpret its evidence. Redundant entries can leave
+that working set while the full journal history remains stored. The original
+conversations remain in storage as well.
 
 ## Check the answer and its evidence
 
@@ -125,16 +170,6 @@ Search can miss a useful conversation, a delegate can overlook a passage, and
 the root can draw the wrong conclusion. Read the result's status and evidence
 alongside its answer. The [quickstart](quickstart.md#understand-the-result)
 shows how to do that in an application.
-
-## Why a graph?
-
-The nodes and edges form an evidence graph. The design borrows an idea from
-graphical models: investigate related parts locally and exchange limited
-messages between them.
-
-LLGM does not assign probabilities or factor functions to its nodes. Its
-messages are model-generated findings and source references. It does not
-guarantee that repeated messages converge to a correct answer.
 
 Continue with [architecture](architecture.md) to see which parts the library
 handles and which decisions the models make.

@@ -39,6 +39,7 @@ from llgm.core.types import (
     reference_to_dict,
 )
 from llgm.storage import BlobStore, LocalBlobStore, S3BlobStore
+from llgm.storage._sqlite import enable_wal
 
 T = TypeVar("T")
 _SCHEMA_VERSION = 3
@@ -211,28 +212,6 @@ def _local_path(uri: str, kind: str) -> Path:
     return Path(uri).expanduser()
 
 
-def _enable_wal(connection: sqlite3.Connection) -> None:
-    """Retry transient first-open journal-mode contention within the connection timeout."""
-    timeout_ms = connection.execute("PRAGMA busy_timeout").fetchone()[0]
-    deadline = time.monotonic() + timeout_ms / 1000
-    connection.execute("PRAGMA busy_timeout = 0")
-    try:
-        while True:
-            try:
-                connection.execute("PRAGMA journal_mode = WAL")
-                return
-            except sqlite3.OperationalError as exc:
-                # Concurrent mode changes can return BUSY before the schema's
-                # BEGIN IMMEDIATE transaction can serialize first-openers.
-                code = getattr(exc, "sqlite_errorcode", None)
-                remaining = deadline - time.monotonic()
-                if code is None or code & 0xFF != sqlite3.SQLITE_BUSY or remaining <= 0:
-                    raise
-                time.sleep(min(0.01, remaining))
-    finally:
-        connection.execute(f"PRAGMA busy_timeout = {timeout_ms}")
-
-
 class Workspace:
     """A single logical evidence workspace.
 
@@ -338,7 +317,7 @@ class Workspace:
                     f"Workspace schema {version} is unsupported; create a new workspace or explicitly export old data"
                 )
             connection.execute("PRAGMA foreign_keys = ON")
-            _enable_wal(connection)
+            enable_wal(connection)
             connection.execute("PRAGMA synchronous = FULL")
             # Serialize first-open schema creation across workspace instances.
             connection.execute("BEGIN IMMEDIATE")

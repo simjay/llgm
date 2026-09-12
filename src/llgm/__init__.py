@@ -1,4 +1,8 @@
-"""LLGM: local evidence reasoning and bounded node-to-node message passing.
+"""Large Language Graphical Model: persistent conversations and recursive reading.
+
+Store evidence with ``LLGM.ingest()`` and ask questions with ``LLGM.answer()``.
+Local model readers return selected findings and source excerpts to a final
+answer model. References keep the supporting original text inspectable.
 
 Importing the package does not create files, load model weights, or access a
 network. Provider and storage resources are created explicitly by applications.

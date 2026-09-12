@@ -57,6 +57,13 @@ Coverage identifies unexecuted code. It is not an accuracy score and has no glob
 percentage gate. Packaging changes also need the installed-distribution checks
 outside the checkout, with `VERIFY_LLGM_WHEEL=1` after installing the build.
 
+The PyPI release workflow calls the same CI workflow at the release commit and
+waits for every job to pass. CI retains its tested wheel and source archive as
+`python-distributions`. Publishing consumes those files without rebuilding.
+See [publishing](publishing.md#release-the-package-to-pypi) for setup and release
+commands. When changing Actions workflows, run `actionlint` if installed, and
+verify changed build and validation commands locally.
+
 ### Documentation checks
 
 `make docs` checks public source links, navigation, rendered API symbols, prose

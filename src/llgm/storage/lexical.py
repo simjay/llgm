@@ -16,6 +16,7 @@ from typing import Any
 from llgm.core.errors import ConfigurationError
 from llgm.core.types import JournalEntry, JournalRef, SourceNode, SourceSpan, reference_to_dict
 from llgm.retrieval.bm25 import SQLiteBM25Retriever
+from llgm.storage._sqlite import enable_wal
 
 _INDEX_VERSION = 2
 _TOKENIZER = "unicode61 remove_diacritics 2"
@@ -40,7 +41,7 @@ class LexicalIndex:
         )
         self._connection.row_factory = sqlite3.Row
         try:
-            self._connection.execute("PRAGMA journal_mode=WAL")
+            enable_wal(self._connection)
             self._connection.execute("BEGIN IMMEDIATE")
             expected = {
                 "schema_version": _INDEX_VERSION,

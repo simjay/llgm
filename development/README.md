@@ -10,7 +10,7 @@ below apply from the repository root.
 | [Code standards](standards.md) | Write useful comments, docstrings, and small interfaces. |
 | [Testing](testing.md) | Select checks, measure coverage, and configure integration gates. |
 | [Documentation conventions](documentation.md) | Place content, maintain navigation, and record changes. |
-| [Publishing](publishing.md) | Understand what CI builds and what GitHub Pages or Read the Docs hosting requires. |
+| [Publishing](publishing.md) | Configure PyPI Trusted Publishing, release tested distributions, and set up GitHub Pages or Read the Docs hosting. |
 | [Brand assets](branding.md) | Maintain the project logo, icons, and repository design assets. |
 
 Run `make` from the repository root to see the available commands. The default
@@ -188,7 +188,9 @@ This creates a source distribution and builds its wheel in isolation, then
 checks all wheel and source-distribution metadata in `dist/` with strict Twine
 validation. The build may fetch its declared build dependencies. It does not
 publish packages or replace the development environment. Installed-package
-checks and release publication remain separate steps.
+checks run in CI. Publishing a GitHub release runs those checks again and uploads
+the tested distributions after they pass. See [publishing](publishing.md) for
+the required PyPI account setup and version-tag convention.
 
 `make clean` removes exactly `build/`, `dist/` and `docs/_build/`. It preserves
 the virtual environment, local datasets, memory workspaces and experiment or

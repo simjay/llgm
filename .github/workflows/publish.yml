@@ -1,0 +1,65 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Require the release tag to match the package version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          project = tomllib.loads(Path("pyproject.toml").read_text())["project"]
+          expected = f"v{project['version']}"
+          actual = os.environ["RELEASE_TAG"]
+          if actual != expected:
+              raise SystemExit(f"Release tag {actual!r} must equal {expected!r}")
+          print(f"Validated {project['name']} {project['version']}")
+          PY
+
+  ci:
+    name: Validate and build release
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish tested distributions
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/llgm/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the tested wheel and source archive
+        uses: actions/download-artifact@v8
+        with:
+          name: python-distributions
+          path: dist/
+      - name: Publish to PyPI with Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@release/v1

@@ -10,7 +10,7 @@ not a second specification of every method.
 
 | Change | Owning code | Relevant tests |
 | --- | --- | --- |
-| Application construction, ingestion and seed selection | [llgm.py](../src/llgm/llgm.py) | [Application](../tests/test_application.py) |
+| Application construction, ingestion and seed selection | [llgm.py](../src/llgm/llgm.py) | [Application](../tests/test_application.py), [entry point](../tests/test_application_entrypoint.py) |
 | Records, references, settings and time selectors | [core](../src/llgm/core) | [Storage](../tests/test_storage.py), [settings](../tests/test_config.py), [environment files](../tests/test_env_file.py) |
 | Source publication, edges and operational journals | [workspace.py](../src/llgm/memory/workspace.py) | [Storage](../tests/test_storage.py), [edges](../tests/test_edges.py), [journal compaction](../tests/test_journal_compaction.py) |
 | Raw evidence, amendments and query scope | [evidence.py](../src/llgm/memory/evidence.py), [query.py](../src/llgm/memory/query.py) | [Evidence](../tests/test_evidence.py), [effective reads](../tests/test_effective_reads.py) |

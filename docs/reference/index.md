@@ -1,6 +1,8 @@
 # Reference
 
-Use this section while writing an application or choosing which features to use.
+The public API describes arguments, return values and resource ownership.
+The capabilities and limits page helps you decide whether the current behavior
+fits your application, including resource requirements and known gaps.
 
 | Reference | Purpose |
 | --- | --- |

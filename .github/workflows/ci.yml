@@ -4,6 +4,7 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -86,7 +87,7 @@ jobs:
           python tools/check_docstrings.py
           make lint PYTHON=python
           python -m build --outdir dist
-          python -m twine check dist/*
+          python -m twine check --strict dist/*
       - name: Install wheel in a fresh environment
         run: |
           python -m venv "$RUNNER_TEMP/llgm-wheel-env"
@@ -111,6 +112,14 @@ jobs:
         run: >-
           "$RUNNER_TEMP/llgm-sdist-env/bin/python" -I -m pytest
           "$GITHUB_WORKSPACE/tests" --import-mode=importlib -q
+      - name: Retain the tested distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-distributions
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
 
   coverage:
     name: Deterministic line and branch coverage

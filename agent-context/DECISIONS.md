@@ -84,3 +84,17 @@ attempts, and preserve unknown usage rather than reporting it as zero.
 
 No one layer substitutes for the others. See [testing](TESTING.md) and the
 [LongMemEval runbook](../experiments/longmemeval.md).
+
+## D08: Start with plain application inputs
+
+`LLGM.from_settings()` reads the environment at context entry when settings are
+omitted. Explicit settings keep their original behavior. `LLGM.ingest()` accepts
+plain text as one user turn and chat turn sequences as one conversation. It
+normalizes them to the existing `Conversation` record before writing anything.
+Callers use that record directly for source IDs, metadata, and timestamps.
+
+This removes setup wrappers from a first program while keeping one async
+resource factory and one storage contract. Exact text, role attribution,
+idempotency, maintenance behavior, and resource cleanup remain unchanged. See
+[application entry-point tests](../tests/test_application_entrypoint.py) and the
+[quickstart](../docs/guide/quickstart.md).

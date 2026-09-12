@@ -1,13 +1,78 @@
-# Publishing the documentation
+# Publishing
 
-This maintainer guide covers building and publishing the user documentation.
-The repository uses Sphinx with the Read the Docs theme. That theme controls
-appearance. It does not put the site online.
+This maintainer guide covers releasing the Python package to PyPI and publishing
+the user documentation. Package releases and documentation deployments use
+separate workflows.
+
+## Release the package to PyPI
+
+`.github/workflows/publish.yml` runs when a GitHub release is published, including
+prereleases. It requires an exact match between the release tag and the version
+in `pyproject.toml`, prefixed with `v`. For example, version `0.1.0a1` requires
+tag `v0.1.0a1`. Pushing a tag alone or saving a draft release does not upload.
+
+The release workflow calls `.github/workflows/ci.yml` from the same commit.
+All CI jobs must pass, including Python 3.11 through 3.14, provider SDK contracts,
+lint, coverage, documentation, and tests against fresh wheel and source archive
+installations. CI retains those tested distributions as the
+`python-distributions` artifact. The publish job downloads that artifact and
+uploads it without rebuilding the package.
+
+Publishing uses [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/using-a-publisher/).
+Only the publish job has `id-token: write`. It runs in the `pypi` GitHub
+environment and uses short-lived OpenID Connect credentials. No PyPI API token
+or GitHub Actions secret is required. The publishing action also produces
+digital attestations by default.
+
+### One-time account setup
+
+1. In `simjay/llgm`, create a GitHub environment named `pypi` under
+   **Settings → Environments**. Set its deployment rules to allow tags matching
+   `v*`.
+2. On PyPI, configure a GitHub Trusted Publisher with these exact values:
+
+   | Field | Value |
+   | --- | --- |
+   | PyPI project name | `llgm` |
+   | Repository owner | `simjay` |
+   | Repository name | `llgm` |
+   | Workflow filename | `publish.yml` |
+   | Environment name | `pypi` |
+
+   If the project does not exist, add a
+   [pending publisher](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
+   in your PyPI account's publishing settings. A pending publisher does not
+   reserve the name. If the project already exists, an owner must add the
+   publisher in its publishing settings. Verify ownership or name availability
+   before the first release.
+
+These account settings are separate from the workflow files. Committing the
+workflow does not configure a PyPI account or create a package release.
+
+### Publish a version
+
+1. Set a new version in `pyproject.toml` and review package metadata and release
+   notes. For the first release, update the installation guides and README that
+   currently describe LLGM as unpublished. README assets and repository links
+   use absolute URLs so the package index can resolve them.
+2. Run `make check`, `make docs`, and `make build`. Commit and push the release
+   changes, including both workflow files. Use that reviewed commit for the tag.
+3. Create and publish a GitHub release with the matching `v`-prefixed tag.
+   Mark alpha, beta, and release-candidate versions as prereleases in GitHub.
+4. Check **Actions → Publish to PyPI**. After successful publication, inspect the
+   PyPI files and rendered description, then install the exact released version
+   in a fresh environment and check `llgm --help`.
+
+`make build` only builds and validates local distributions. It never uploads.
+Published versions cannot be overwritten. The workflow keeps duplicate-file
+errors visible instead of enabling `skip-existing`. If an upload partially
+succeeds, inspect the files on PyPI before retrying or choosing a new version.
 
 ## What happens when you push
 
 `.github/workflows/ci.yml` validates pushes and pull requests. Its documentation
-job runs `make docs` with warnings treated as errors.
+job runs `make docs` with warnings treated as errors. It also accepts manual
+runs and calls from the package release workflow.
 
 `.github/workflows/docs.yml` builds and audits the user site on pushes to `main`
 and manual runs from `main`. It uploads only generated HTML as a Pages artifact.
@@ -18,7 +83,8 @@ is skipped. The ordinary CI workflow never deploys.
 | Location | What is available |
 | --- | --- |
 | Repository on GitHub | Markdown files are readable after they are committed and pushed |
-| GitHub Actions | CI validates changes. The documentation workflow builds an artifact and conditionally deploys it |
+| GitHub Actions | CI validates changes and retains tested distributions. Published GitHub releases trigger the PyPI workflow. The documentation workflow builds an artifact and conditionally deploys it |
+| PyPI | Requires a matching Trusted Publisher and a successful release workflow |
 | GitHub Pages | Requires Actions as the Pages source and `DOCS_PUBLISH_ENABLED=true` |
 | Read the Docs | `.readthedocs.yaml` is prepared, but the repository must be connected to a Read the Docs project |
 
@@ -55,6 +121,9 @@ publishing. See
 Read the Docs is the alternative hosting route described below. Both hosting
 options build from `docs/`. Neither publishes repository development guides,
 research, benchmark runbooks, or agent context.
+
+The repository uses Sphinx with the Read the Docs theme. That theme controls
+appearance. It does not put the site online.
 
 ## Build and preview locally
 
@@ -142,12 +211,3 @@ The displayed version comes from the installed package. Release tags should
 include matching package and documentation versions. Rebuilding documentation
 does not validate a changed implementation. Run the checks appropriate to the
 underlying code change before expanding a public support claim.
-
-`make build` creates the wheel and source archive and checks package metadata.
-It does not upload to PyPI or publish the site. Package publication is a separate
-release step after confirming the distribution name and release metadata.
-
-The repository README uses relative logo and documentation links for GitHub.
-Before a PyPI release, inspect its rendered long description and provide absolute
-asset and documentation URLs where the package index cannot resolve repository
-paths.

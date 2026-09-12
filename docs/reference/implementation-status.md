@@ -1,15 +1,19 @@
 # Capabilities and limits
 
-LLGM is an alpha library installed from source. Storage, search and explicit
-corrections can run without a model or Docker. Answer generation adds configured
-model clients and local Docker execution. This page describes the supported
-features and the limits to consider when building an application.
+LLGM is an alpha library. Its first [PyPI release](https://pypi.org/project/llgm/)
+is in progress. Use the checkout installation in the
+[quickstart](../guide/quickstart.md) until that release is available.
+
+You can store conversations, search their text and apply explicit corrections
+without a model or Docker. To ask LLGM a question, configure model clients and
+local Docker execution. The tables below describe what you can use today and
+where an application still needs its own decisions or checks.
 
 ## Supported capabilities
 
 | Capability | Current behavior |
 | --- | --- |
-| Integrated application | `LLGM` ingests conversations, maintains primary edges, retrieves starting nodes, delegates reading, and synthesizes an answer. |
+| Integrated application | `LLGM.from_settings()` opens memory using environment configuration. `ingest()` accepts plain text, chat turns or a `Conversation` with metadata. `answer()` finds starting conversations, delegates reading and combines the findings. |
 | Source storage | `Workspace` stores original turns and stable Unicode spans. Idempotency supports ingestion retries. Changed information becomes a new node. |
 | Primary graph | Directed edges retain provenance, applicability, and withdrawal state. Delegates can inspect relationships and investigate their targets. |
 | Journals and corrections | Explicit journal writes retain history and can change effective reads. Original and replacement references remain available. Maintenance does not generate these corrections automatically. |

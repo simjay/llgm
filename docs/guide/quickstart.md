@@ -1,8 +1,8 @@
 # Quickstart
 
-You will store a short conversation, ask a question about it, and read the
-source text cited by the answer. This example uses OpenAI for model calls and
-saves its data locally.
+Start with one note and one question. Then add a conversation and inspect the
+text behind an answer. LLGM handles storage, search, and the model calls between
+those steps.
 
 You need Python 3.11 or later, Git, Docker, and an OpenAI API key with access to
 the models you select. The shell commands below use Bash or Zsh.
@@ -10,16 +10,28 @@ the models you select. The shell commands below use Bash or Zsh.
 ## 1. Install LLGM
 
 In a directory where you want to keep the example, create and activate a virtual
-environment. LLGM is not published on PyPI yet, so install it from the repository:
+environment:
 
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
+```
+
+The first [PyPI release](https://pypi.org/project/llgm/) is in progress. Its
+installation command will be:
+
+```sh
+python -m pip install --pre 'llgm[openai]'
+```
+
+Until that release is available, install the current code from the repository:
+
+```sh
 python -m pip install 'llgm[openai] @ git+https://github.com/simjay/llgm.git'
 ```
 
-The `[openai]` extra installs the provider client. See
-[configuration](configuration.md) for other providers.
+The `[openai]` extra includes the provider client used here. Other providers are
+covered in [configuration](configuration.md).
 
 ## 2. Prepare Docker
 
@@ -61,32 +73,20 @@ LLGM does not discover or load that file automatically.
 
 ## 4. Store evidence and ask a question
 
-Save this complete script as `quickstart.py`. It stores a note about a production
-database, asks which database is used, and prints the cited source text:
+Save this as `quickstart.py`:
 
 ```python
 import asyncio
 
-from llgm import Conversation, LLGM, Settings
+from llgm import LLGM
 
 
 async def main():
-    """Store a conversation, answer a question, and inspect its sources."""
-    async with LLGM.from_settings(Settings.from_env()) as memory:
-        outcome = await memory.ingest(
-            Conversation.from_turns([
-                {"role": "user", "text": "The production database is PostgreSQL."},
-            ]),
-            idempotency_key="quickstart-production-database",
-        )
-        result = await memory.answer("Which database does production use?")
-        print("maintenance:", outcome.maintenance.status)
-        print("answer:", result.answer)
-        print("status:", result.status)
-        print("unresolved:", result.evidence.unresolved)
-        for reference in result.references:
-            source = await memory.workspace.resolve(reference)
-            print("source:", source.text)
+    """Save a note and ask a question about it."""
+    async with LLGM.from_settings() as memory:
+        await memory.ingest("Atlas production uses PostgreSQL.")
+        result = await memory.answer("Which database does Atlas production use?")
+        print(result.answer)
 
 
 asyncio.run(main())
@@ -98,21 +98,47 @@ Run it from the activated environment:
 python quickstart.py
 ```
 
-This makes hosted model calls. The answer should identify PostgreSQL, and the
-source output should contain the original statement. Exact wording depends on
-the models. Inspect the status and unresolved reasons if a source or answer
-is missing.
+The answer should identify PostgreSQL. Its exact wording depends on the models.
+Ingestion can call a model to find relationships, and answering makes hosted
+model calls to read and combine evidence.
+
+`from_settings()` reads the environment configured above when the block opens.
+`ingest()` stores the string as one user message. `answer()` searches stored
+evidence and returns the model's answer with its references. You can pass an
+explicit `Settings` object later when you need configuration in Python.
 
 Your data stays in `./memory` after the script finishes. Run from the same working
 directory to reuse it, or set `LLGM_WORKSPACE_PATH` to choose another location.
-`LLGM.from_settings()` closes its connections when the `async with` block ends.
+The `async with` block closes the workspace and model clients when it ends.
+`asyncio.run(main())` starts this standalone program. In an async application,
+use the same memory block inside your existing async function.
 
 ## 5. Add more conversations
 
-Call `ingest()` for each new conversation. Each call creates an immutable source
-node. Retrying the same input with the same `idempotency_key` reuses that source,
-so rerunning this example does not duplicate its note. Use a new key for new
-content. Reusing a key with changed content raises a conflict.
+You can pass a complete chat as a list of messages. Put the following calls
+inside the memory block, replacing the single-note example:
+
+```python
+outcome = await memory.ingest(
+    [
+        {"role": "user", "content": "Atlas production uses PostgreSQL."},
+        {"role": "assistant", "content": "How long should its backups be kept?"},
+        {"role": "user", "content": "Keep them for seven days."},
+    ],
+    idempotency_key="atlas-backup-conversation",
+)
+result = await memory.answer("How long do we keep Atlas production backups?")
+print(result.answer)
+```
+
+Every call stores one conversation as an immutable source node. Plain text is a
+shortcut for a single user turn. Message lists preserve the roles and text you
+provide. Use `Conversation.from_turns()` when you also want to attach source
+metadata, a timestamp, or your own node ID.
+
+The first example creates another note each time it runs. An `idempotency_key`,
+as used in the chat example, lets a retry reuse the same saved source. Use a new
+key for new content. Reusing a key with changed content raises a conflict.
 
 Maintenance looks for relationships to existing nodes and may run again on a
 retry. A failed maintenance step does not remove the stored source. The
@@ -126,6 +152,22 @@ final answer. If you already know where to start, pass
 still search or follow links for more evidence.
 
 ## Understand the result
+
+An answer includes the evidence the model selected. Inside the same memory block,
+you can open those references and inspect the original text:
+
+```python
+for reference in result.references:
+    source = await memory.workspace.resolve(reference)
+    print(source.text)
+
+print(result.status)
+print(result.evidence.unresolved)
+```
+
+This is useful when an answer is surprising or incomplete. For the backup
+question, look for the statement about seven days and the conversation that
+identifies Atlas production.
 
 | Status | Meaning |
 | --- | --- |

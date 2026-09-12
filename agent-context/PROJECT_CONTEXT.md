@@ -1,9 +1,12 @@
 # Project context
 
-LLGM is a Python library for answering questions from stored conversations with
-traceable source references. It combines persistent evidence, passage retrieval,
-and recursive model reading. The package is an experimental alpha installed
-from source. Check [package metadata](../pyproject.toml) and
+LLGM stands for Large Language Graphical Model. It is a Python library for
+answering questions from stored conversations with traceable source references.
+It combines persistent evidence, passage retrieval, and recursive model reading.
+The package is an experimental alpha, with its first PyPI release in progress.
+The [quickstart](../docs/guide/quickstart.md) distinguishes package installation
+from the repository installation available before that release.
+Check [package metadata](../pyproject.toml) and
 [capabilities and limits](../docs/reference/implementation-status.md) for current
 requirements and supported behavior.
 
@@ -27,7 +30,11 @@ The [agent code map](ARCHITECTURE.md) points to the implementation.
 ## Current boundaries
 
 - `LLGM` is the product entry point. `from_settings()` constructs and owns its
-  configured resources. Direct construction accepts caller-owned resources.
+  configured resources, reading environment settings at context entry when no
+  `Settings` object is passed. Direct construction accepts caller-owned resources.
+- Application ingestion accepts plain text, chat turn sequences, or an explicit
+  `Conversation`. Plain text becomes one user turn. The application normalizes
+  these inputs before storage, preserving text and existing retry semantics.
 - Local SQLite metadata and BM25 search are the default. S3 can hold source
   blobs. This does not make the metadata database distributed.
 - Official ColBERTv2 with PLAID and other retrievers use optional adapters.

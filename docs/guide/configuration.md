@@ -1,17 +1,33 @@
 # Configuration
 
-Start with local storage and configure the two model roles. The sidecar model
-reads evidence and can investigate related nodes. The root model combines the
-findings into an answer. Both roles can use the same provider or different ones.
+Choose a model to read your sources and a model to write the final answer.
+LLGM calls these the **sidecar** and **root** roles. You can use the same model
+for both, or use a smaller model for reading and a stronger one for the answer.
+The [quickstart](quickstart.md) shows the initial setup with local storage.
 
-Most applications need only a workspace path, two model IDs and provider
-credentials. The [quickstart](quickstart.md) shows that setup. This guide explains
-how to change it and how to supply your own clients or search backend.
+Once you have set the model IDs and credentials in your environment, open LLGM
+without constructing a separate settings object:
 
-`Settings.from_env()` reads environment variables. Use
-`Settings.load(config_file="llgm.toml", overrides={...})` to add a TOML file or
-Python overrides. These methods only parse settings. They do not create storage
-or connect to a provider.
+```python
+from llgm import LLGM
+
+
+async def ask(question):
+    """Answer from the workspace selected by the environment."""
+    async with LLGM.from_settings() as memory:
+        return await memory.answer(question)
+```
+
+The environment is read when the `async with` block starts. LLGM opens the
+workspace and provider clients, then closes them when the block ends. Keep that
+block open to store sources or ask several questions with the same application.
+
+Use an explicit `Settings` object when you need a TOML file or Python overrides.
+`Settings.from_env()` reads environment variables, and
+`Settings.load(config_file="llgm.toml", overrides={...})` adds those other inputs.
+These methods only parse settings. They do not create storage or connect to a
+provider. Pass the resulting object to `LLGM.from_settings(settings)` to use it
+without reloading configuration.
 
 Values take precedence in this order:
 
@@ -21,9 +37,9 @@ Values take precedence in this order:
 4. Values added from the selected environment file
 5. Library defaults
 
-Only supplied fields replace lower-priority values. Model IDs and credentials
-are captured when settings and clients are created. Changing a file or the
-environment does not update an existing application.
+Only supplied fields replace lower-priority values. Settings capture model IDs
+when they are created, and provider clients read credentials when they are
+created. Changing a file or the environment does not update an open application.
 
 ## Local environment file
 
@@ -42,14 +58,19 @@ export the same variables directly instead.
 Load the selected file once at application startup:
 
 ```python
-from llgm import Settings, load_env_file
+from llgm import LLGM, load_env_file
 
 load_env_file(".env")
-settings = Settings.from_env()
+
+
+async def ask(question):
+    """Answer using the environment configured at application startup."""
+    async with LLGM.from_settings() as memory:
+        return await memory.answer(question)
 ```
 
-Call `load_env_file()` before `Settings.load()` when also using TOML, and before
-creating provider clients so they can read credentials. The helper adds missing
+Call `load_env_file()` before entering `LLGM.from_settings()`, or before
+`Settings.load()` when also using TOML. The helper adds missing
 variables to the process environment. Existing variables win, including empty
 values. It does not search for files or load them automatically. Omit the call
 when your environment is already configured.
