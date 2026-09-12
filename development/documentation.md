@@ -17,19 +17,27 @@ development, testing, release operations, and research have separate homes.
 | `experiments/` | Repository-only benchmark configurations, frozen protocols, source pins, and run commands. |
 | `AGENTS.md` | Tracked instructions for agents working in a fresh clone. Contributor guidance remains in `CONTRIBUTING.md` and `development/`. Excluded from the documentation site and source distribution. |
 | Local `research/` | Ignored, untracked designs, hypotheses, original briefs, and dated measurements. Never committed, pushed, or published. |
-| Local `agent-context/` | Optional ignored, untracked decisions, code ownership notes, and task state. Never committed, pushed, or published. |
+| `agent-context/` | Six tracked Markdown files for shared coding-agent knowledge, decisions, code pointers, testing, and remaining work. Excluded from the user site and packages. All other files in this directory stay private. |
 
 Give each fact a canonical home. Instructions for running the library belong in
 `docs/`. Instructions for changing, testing, or releasing this repository belong
 in `development/`. Agent notes may refer to either without copying them. Keep
 machine paths, transient credential availability, and current task state in
-local agent context. Never store credentials in any of these documents.
+ignored local agent notes. Never store credentials in any of these documents.
 
-Keep `research/` and `agent-context/` on the local filesystem only. Do not stage,
-commit, push, or copy their contents into tracked files, package archives, or
-published assets. Tracked documentation must not link to either directory.
-Contributor instructions, tests, and builds must work in a fresh clone where
-neither directory exists.
+Keep `research/`, private run artifacts, and machine-specific context local.
+Do not stage, commit, push, or copy their contents into tracked files, package
+archives, or published assets. `.gitignore` allows only `README.md`,
+`PROJECT_CONTEXT.md`, `ARCHITECTURE.md`, `DECISIONS.md`, `TESTING.md`, and
+`REMAINING_TASKS.md` under `agent-context/`. Other entries there, including `local/`
+and `LOCAL_STATE.md`, remain ignored. Never force-add them.
+
+[Agent context](../agent-context/README.md) follows the root
+[AGENTS.md](../AGENTS.md) entry point. It stores concise project knowledge, not
+conversation transcripts or private experiment reports. Repository guidance may
+link these shared files. Tracked documents must not depend on private notes or
+research. Contributor instructions, tests, and builds must work in a fresh clone
+without those local files.
 
 The user documentation must stand alone. Its explanations, examples, navigation
 and build checks must work without `research/`, `agent-context/`, `AGENTS.md`,
@@ -105,7 +113,8 @@ limitations without reproducing internal reports or task history.
 | Validation command or contributor requirement | Development setup, testing guide, or standards, plus any command wrappers and CI that implement it. |
 | Benchmark method or frozen inputs | Repository-only experiment instructions and the applicable protocol. Create a new protocol version for a changed frozen run. |
 | Completed measurement | Local dated report with code/input identities, denominators, limitations, and artifact locations. Update public capability limits only when the evidence supports them. |
-| Internal task progress or local prerequisite | Existing local agent backlog or local state, kept untracked. |
+| Shared design decision or public task status | Relevant curated agent-context file, with implementation pointers and an observable completion check. |
+| Session progress, private measurement or machine prerequisite | Ignored local notes, outside shared agent context. |
 
 State implemented and verified behavior separately. Code and completed checks
 determine what is supported. A later code change does not rerun an earlier
@@ -120,9 +129,10 @@ It also requires every guide and reference page as a direct sidebar entry on
 all authored pages, search, and the generated index. Links in the page body or
 inside collapsed branches cannot satisfy that check. Verify desktop navigation
 and the mobile menu in a browser after changing the sidebar.
-It does not read or validate internal writing. Use `make docs-links` separately
-to check links across repository Markdown. It also checks local research and
-agent context when present, and tolerates their absence in a fresh clone.
+It does not read or validate agent context. Use `make docs-links` separately
+to check links across repository Markdown, including the six curated context
+files. Private agent notes, archives, and research are excluded even when they
+exist in the checkout. Their absence is tolerated in a fresh clone.
 That optional check is not a documentation build prerequisite. Keep the
 publication exclusion checks even when those local directories are absent.
 

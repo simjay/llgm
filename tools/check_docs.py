@@ -38,11 +38,17 @@ MYST_INCLUDE = re.compile(r"^\{(?:include|literalinclude)\}\s+(\S+)")
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 REPOSITORY_DIRECTORIES = (
     "development",
-    "research",
-    "agent-context",
     "experiments",
     "examples",
     "tests/fixtures",
+)
+PUBLIC_AGENT_CONTEXT = (
+    "README.md",
+    "PROJECT_CONTEXT.md",
+    "ARCHITECTURE.md",
+    "DECISIONS.md",
+    "TESTING.md",
+    "REMAINING_TASKS.md",
 )
 PROSE_EXCLUSIONS = {"code", "pre", "script", "style", "svg", "textarea"}
 VOID_ELEMENTS = {
@@ -66,7 +72,11 @@ EXCLUDED_SITE_PATHS = (
     "development",
     "research",
     "agent-context",
+    "AGENTS.md",
     "experiments",
+    "_static/research",
+    "_static/agent-context",
+    "_static/AGENTS.md",
     "_static/brand/explorations",
 )
 
@@ -232,12 +242,14 @@ def check_sources(root: Path, *, repository_links: bool = False) -> list[str]:
     """Audit public sources, optionally checking separate repository documents too."""
     errors = []
     sources = []
+    public_context = {root / "agent-context" / name for name in PUBLIC_AGENT_CONTEXT}
     if repository_links:
         sources.extend(
             root / name
             for name in ("README.md", "AGENTS.md", "CONTRIBUTING.md")
             if (root / name).exists()
         )
+        sources.extend(path for path in public_context if path.is_file())
     directories = ("docs",) + (REPOSITORY_DIRECTORIES if repository_links else ())
     for directory in directories:
         sources.extend(
@@ -263,21 +275,24 @@ def check_sources(root: Path, *, repository_links: bool = False) -> list[str]:
             elif not destination.exists():
                 errors.append(f"{location}: missing local target {target}")
             if (
-                (
-                    destination.is_relative_to(root / "agent-context")
-                    or destination == root / "AGENTS.md"
-                )
-                and not path.is_relative_to(root / "agent-context")
-                and path != root / "AGENTS.md"
-            ):
+                destination.is_relative_to(root / "agent-context")
+                or destination == root / "AGENTS.md"
+            ) and path.is_relative_to(root / "docs"):
                 errors.append(f"{location}: public documentation links to agent context: {target}")
-            published = path.is_relative_to(root / "docs") or path in (
-                root / "README.md",
-                root / "CONTRIBUTING.md",
-            )
-            if published and destination.is_relative_to(root / "research"):
+            if destination.is_relative_to(root / "research"):
                 errors.append(
                     f"{location}: public documentation links to internal research: {target}"
+                )
+            if (
+                destination.is_relative_to(root / "agent-context")
+                and destination not in public_context
+            ) or (
+                destination.is_relative_to(root / "runs")
+                or destination.is_relative_to(root / "private")
+                or destination == root / "LOCAL_STATE.md"
+            ):
+                errors.append(
+                    f"{location}: repository documentation links to local state: {target}"
                 )
             if path.is_relative_to(root / "docs") and (
                 destination.is_relative_to(root / "development")

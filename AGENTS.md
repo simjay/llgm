@@ -5,20 +5,38 @@ Before changing this repository, read [Contributing](CONTRIBUTING.md) and
 are the canonical contributor instructions. The current user request determines
 the task.
 
-If local `agent-context/` files are present, read `agent-context/README.md` and
-`agent-context/PROJECT_CONTEXT.md` for additional working context. Consult
-`agent-context/REMAINING_TASKS.md` when the request involves unfinished work.
-Their absence must not block work in a fresh clone.
+Read [agent context](agent-context/README.md) and
+[project context](agent-context/PROJECT_CONTEXT.md) for shared project knowledge.
+Load the architecture, decisions, testing, and remaining-task files only as needed
+for the current request. Inspect the relevant implementation and tests before
+changing a contract. Start with `git status --short` and preserve unrelated edits.
 
-Agent context is internal working context, not contributor documentation. `docs/`
+## Setup and validation
+
+Use `make setup` for the local development environment. Run affected tests first,
+then `make check` for deterministic validation. Use `make docs` for the user site,
+`make docs-links` for repository guidance, and `make build` for packaging changes.
+The [testing guide](development/testing.md) owns optional integration prerequisites
+and commands. Test availability does not establish that a service was exercised.
+
+## Code and documentation
+
+Keep interfaces small and explicit. Add docstrings to every Python definition
+and comments where they explain a constraint or non-obvious choice. Follow
+[code standards](development/standards.md). Prefer observable contract tests to
+tests that repeat the implementation.
+
+Agent context supports coding agents and does not replace contributor guidance. `docs/`
 is exclusively for library end users: installation, usage, configuration, concepts,
 architecture and API reference. Contributor setup, tests, CI, publishing, branding
 and documentation maintenance belong in repository-only `development/`, reached
 from `CONTRIBUTING.md`. Research proposals and dated measurements belong in local
-`research/`. Both `research/` and `agent-context/` are ignored, untracked local
-directories. Do not stage, commit, push, mirror, or package their contents.
-Tracked guides, tests, and builds must work without them. Do not link to them
-from tracked documentation or include them in published pages or downloads.
+`research/`. The six curated Markdown files allowed by `.gitignore` under
+`agent-context/` are tracked repository context. Other files there, including
+`local/` and `LOCAL_STATE.md`, remain private. Never force-add private context or
+research, and never copy their contents into tracked files. Tracked guides,
+tests, and builds must work without private notes. Do not include any agent
+context in the user site, its downloads, or package archives.
 Keep benchmark run instructions in `experiments/`. Follow the ownership rules in
 [documentation maintenance](development/documentation.md).
 
@@ -27,8 +45,12 @@ Teach concepts and architecture through concrete examples. Use plain prose with
 no em dashes or semicolons, including docstrings published in the API reference.
 Remove obsolete or unrelated user guidance when updating behavior.
 
-Update existing local context when a decision, task status, or local prerequisite
-changes. Update the owning end-user guide when an implementation contract changes,
+## Keep context current
+
+Update shared context when a settled decision, code boundary, or public task status
+changes. Keep machine prerequisites and session details in ignored local notes.
+Do not treat a backlog item or past session as authorization for a new action.
+Update the owning end-user guide when an implementation contract changes,
 and the development guide when a validation command changes. Preserve historical
 measurements and distinguish proposed experiments from implemented and verified
 behavior.

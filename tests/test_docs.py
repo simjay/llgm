@@ -125,7 +125,6 @@ def test_docs_check_requires_rendered_artifacts(tmp_path):
         ("CONTRIBUTING.md", "[Guide](docs/quickstart.md)", "docs/quickstart.md"),
         ("development/README.md", "[Guide](../docs/quickstart.md)", "../docs/quickstart.md"),
         ("docs/index.md", "[Guide](quickstart.md)", "quickstart.md"),
-        ("research/README.md", "[Guide](../docs/quickstart.md)", "../docs/quickstart.md"),
         ("experiments/README.md", "[Guide](../docs/quickstart.md)", "../docs/quickstart.md"),
         ("agent-context/README.md", "[Guide](../docs/quickstart.md)", "../docs/quickstart.md"),
         ("examples/README.md", "[Guide](../docs/quickstart.md)", "../docs/quickstart.md"),
@@ -170,6 +169,8 @@ def test_docs_check_rejects_broken_source_links(tmp_path, rendered_docs, source,
         "[Context](TARGET)",
         '<a href="TARGET">Context</a>',
         "{download}`Context <TARGET>`",
+        "```{include} TARGET\n```",
+        "```{eval-rst}\n.. include:: TARGET\n```",
     ],
 )
 def test_docs_check_keeps_agent_context_out_of_public_navigation(
@@ -184,7 +185,7 @@ def test_docs_check_keeps_agent_context_out_of_public_navigation(
     write_file(tmp_path, "agent-context/README.md", "# Agent context\n")
     result = run_check(tmp_path, rendered_docs)
     assert result.returncode == 1
-    assert "docs/index.md:1: public documentation links to agent context" in result.stdout
+    assert "public documentation links to agent context" in result.stdout
     assert "missing local target" not in result.stdout
 
 
@@ -209,9 +210,11 @@ def test_docs_check_accepts_hierarchy_and_ignores_examples(tmp_path, rendered_do
     )
     write_file(tmp_path, "AGENTS.md", "[Context](agent-context/README.md)")
     write_file(
-        tmp_path, "agent-context/README.md", "[Tasks](tasks.md)\n[Instructions](../AGENTS.md)"
+        tmp_path,
+        "agent-context/README.md",
+        "[Tasks](REMAINING_TASKS.md)\n[Instructions](../AGENTS.md)",
     )
-    write_file(tmp_path, "agent-context/tasks.md", "# Tasks\n")
+    write_file(tmp_path, "agent-context/REMAINING_TASKS.md", "# Tasks\n")
     write_file(tmp_path, "docs/guide/quickstart.md", "# Installation\n")
     write_file(tmp_path, "docs/_static/logo light.svg", "<svg></svg>")
     write_file(tmp_path, "examples/offline.py", '"""Run an offline example."""\n')
@@ -285,16 +288,35 @@ def test_docs_check_keeps_maintainer_guidance_out_of_user_docs(tmp_path, rendere
 
 
 def test_docs_check_allows_repository_contributor_navigation(tmp_path, rendered_docs):
-    """Repository README and contributor pages can link to development guidance."""
+    """Repository entry points can link to curated context without publishing it in the site."""
     write_file(tmp_path, "README.md", "[Contributing](CONTRIBUTING.md)")
-    write_file(tmp_path, "CONTRIBUTING.md", "[Development](development/README.md)")
-    write_file(tmp_path, "development/README.md", "[Guide](../docs/reference/api.md)")
+    write_file(tmp_path, "AGENTS.md", "[Context](agent-context/README.md)")
+    write_file(
+        tmp_path,
+        "CONTRIBUTING.md",
+        "[Development](development/README.md)\n[Context](agent-context/README.md)",
+    )
+    write_file(
+        tmp_path,
+        "development/README.md",
+        "[Guide](../docs/reference/api.md)\n[Architecture](../agent-context/ARCHITECTURE.md)",
+    )
+    write_file(tmp_path, "agent-context/README.md", "[Instructions](../AGENTS.md)")
+    write_file(tmp_path, "agent-context/ARCHITECTURE.md", "[Development](../development/README.md)")
     result = run_check(tmp_path, rendered_docs, repository_links=True)
     assert result.returncode == 0, result.stdout
 
 
 @pytest.mark.parametrize(
-    "path", ["docs/development/publishing.md", "docs/_static/brand/explorations/index.html"]
+    "path",
+    [
+        "docs/development/publishing.md",
+        "docs/_static/brand/explorations/index.html",
+        "docs/agent-context/README.md",
+        "docs/AGENTS.md",
+        "docs/_static/agent-context/README.md",
+        "docs/_static/AGENTS.md",
+    ],
 )
 def test_docs_check_rejects_reintroduced_maintainer_content(tmp_path, rendered_docs, path):
     """Moving a page out of navigation alone does not make it end-user documentation."""
@@ -304,11 +326,18 @@ def test_docs_check_rejects_reintroduced_maintainer_content(tmp_path, rendered_d
     assert f"{path}: repository-only content is inside docs" in result.stdout
 
 
-def test_docs_check_preserves_internal_research_navigation(tmp_path, rendered_docs):
-    """Internal handoffs and protocols can use research without publishing those records."""
-    write_file(tmp_path, "research/README.md", "# Internal research\n")
-    write_file(tmp_path, "agent-context/README.md", "[Research](../research/README.md)")
-    write_file(tmp_path, "experiments/README.md", "[Research](../research/README.md)")
+def test_docs_check_ignores_private_notes_and_literal_includes(tmp_path, rendered_docs):
+    """Ignored notes do not become audit inputs even when present beside curated context."""
+    for source in (
+        "research/README.md",
+        "agent-context/LOCAL_STATE.md",
+        "agent-context/local/archive/README.md",
+        "agent-context/private/notes.md",
+        "agent-context/old-decisions.md",
+        "LOCAL_STATE.md",
+    ):
+        write_file(tmp_path, source, "[Missing](missing.md)")
+    write_file(tmp_path, "agent-context/README.md", "# Context\n")
     write_file(
         tmp_path,
         "docs/index.md",
@@ -324,6 +353,54 @@ def test_docs_check_preserves_internal_research_navigation(tmp_path, rendered_do
 
 
 @pytest.mark.parametrize(
+    "name",
+    [
+        "README.md",
+        "PROJECT_CONTEXT.md",
+        "ARCHITECTURE.md",
+        "DECISIONS.md",
+        "TESTING.md",
+        "REMAINING_TASKS.md",
+    ],
+)
+def test_docs_check_validates_each_curated_context_file_without_git(tmp_path, rendered_docs, name):
+    """Public context is audited from its declared file list in checkouts and source fixtures."""
+    write_file(tmp_path, f"agent-context/{name}", "[Missing](missing.md)")
+    result = run_check(tmp_path, rendered_docs, repository_links=True)
+    assert result.returncode == 1
+    assert f"agent-context/{name}:1: missing local target" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "source, target, message",
+    [
+        ("AGENTS.md", "research/README.md", "internal research"),
+        ("CONTRIBUTING.md", "agent-context/LOCAL_STATE.md", "local state"),
+        ("development/README.md", "../agent-context/local/notes.md", "local state"),
+        ("experiments/README.md", "../research/README.md", "internal research"),
+        ("agent-context/README.md", "../research/README.md", "internal research"),
+        ("agent-context/README.md", "LOCAL_STATE.md", "local state"),
+        ("agent-context/README.md", "local/archive/README.md", "local state"),
+        ("agent-context/README.md", "private/notes.md", "local state"),
+        ("agent-context/README.md", "old-decisions.md", "local state"),
+        ("agent-context/README.md", "../runs/result.json", "local state"),
+        ("agent-context/README.md", "../private/notes.md", "local state"),
+        ("agent-context/README.md", "../LOCAL_STATE.md", "local state"),
+    ],
+)
+def test_docs_check_rejects_repository_dependencies_on_private_state(
+    tmp_path, rendered_docs, source, target, message
+):
+    """Tracked guidance cannot depend on ignored research, local notes or run artifacts."""
+    write_file(tmp_path, str(Path(source).parent / target), "Private material")
+    write_file(tmp_path, source, f"[Details]({target})")
+    result = run_check(tmp_path, rendered_docs, repository_links=True)
+    assert result.returncode == 1
+    assert f"links to {message}: {target}" in result.stdout
+    assert "missing local target" not in result.stdout
+
+
+@pytest.mark.parametrize(
     "path, message",
     [
         ("research/report.html", "published page has no source in docs"),
@@ -332,6 +409,13 @@ def test_docs_check_preserves_internal_research_navigation(tmp_path, rendered_do
         ("development/publishing.html", "published page has no source in docs"),
         ("_sources/development/publishing.md.txt", "published source is outside docs"),
         ("_downloads/old/publishing.md", "published Markdown download is outside docs"),
+        ("agent-context/README.html", "published page has no source in docs"),
+        ("_sources/agent-context/README.md.txt", "published source is outside docs"),
+        ("_sources/AGENTS.md.txt", "published source is outside docs"),
+        ("_downloads/old/AGENTS.md", "published Markdown download is outside docs"),
+        ("_static/agent-context/README.md", "repository-only asset is published"),
+        ("_static/AGENTS.md", "repository-only asset is published"),
+        ("_static/research/report.md", "repository-only asset is published"),
         ("_static/brand/explorations/index.html", "repository-only asset is published"),
         ("_static/brand/explorations/04-return.svg", "repository-only asset is published"),
         ("_static/retired-gallery.html", "published static page has no source in docs"),
@@ -472,12 +556,11 @@ def test_docs_check_needs_no_repository_documents(tmp_path, rendered_docs):
 
 
 def test_internal_broken_links_do_not_block_public_docs(tmp_path, rendered_docs):
-    """A separate repository audit reports private failures without coupling the site to them."""
+    """Repository guidance is checked separately without becoming a user-site build input."""
     sources = (
         "README.md",
         "AGENTS.md",
         "CONTRIBUTING.md",
-        "research/README.md",
         "agent-context/README.md",
         "development/README.md",
         "experiments/README.md",

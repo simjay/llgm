@@ -22,7 +22,13 @@ runs/
 htmlcov/
 coverage.xml
 
-# Local research and agent working context
+# Private research and machine-specific agent context
 /research/
-/agent-context/
+/agent-context/*
+!/agent-context/README.md
+!/agent-context/PROJECT_CONTEXT.md
+!/agent-context/ARCHITECTURE.md
+!/agent-context/DECISIONS.md
+!/agent-context/TESTING.md
+!/agent-context/REMAINING_TASKS.md
 /.agents/

@@ -15,4 +15,7 @@ resulting behavior, and the checks you ran when submitting a change.
 - Use the [testing guide](development/testing.md) to choose the appropriate checks.
 - Follow [documentation ownership](development/documentation.md) when updating guides or moving pages. Run `make docs` for documentation changes.
 
+For work with a coding agent, [AGENTS.md](AGENTS.md) is the entry point to the
+repository instructions and shared project context.
+
 Report reproducible bugs or propose changes through [GitHub issues](https://github.com/simjay/llgm/issues).
