@@ -232,9 +232,9 @@ if settings.get("node_api", False):
     def source_info(node_id=None, offset=0, limit=32):
         """List bounded canonical turn handles without loading source text into Python."""
         return node_call("source_info", node_id=node_id, offset=offset, limit=limit)
-    def edges(node_id=None, relation=None):
+    def edges(node_id=None):
         """Discover primary graph neighbors without reading their source text."""
-        return node_call("edges", node_id=node_id, relation=relation)
+        return node_call("edges", node_id=node_id)
     def query_node(node_id, question):
         """Request an isolated recursive node computation and its cited findings."""
         return node_call("query_node", node_id=node_id, question=question)

@@ -6,49 +6,72 @@ and a final model combines the returned excerpts into an answer. The stored
 history can grow without requiring every answer to place that entire history in
 one prompt.
 
-There are two kinds of work here. **Ingestion** preserves conversations and can
-connect them to related sources. **Answering** chooses what to investigate for a
-particular question. The relationships persist between questions. The readers
-and their working contexts last for one answer.
+`answer()` is the primary application entry point. It stores new user turns,
+continues or selects a topic, runs local readers, and stores the returned reply.
+`ingest()` catches up on earlier conversation batches without generating a reply.
 
-We will follow the team conversations from [concepts](concepts.md). Database
-records the database choice, Backups records retention, and Registry records
-the hosting region. A later Update conversation changes the database choice.
-The application stores these through `LLGM.ingest()` and asks about them through
-`LLGM.answer()`.
+## Keep a topic together
 
-## Store first, then organize
+A persistent conversation ID identifies the active topic. Topic routing sees a
+bounded preview of recent active turns and retrieved candidate nodes. It prefers
+the active topic, can return to another existing topic, and creates a node only
+for a clear topic change. Length, elapsed time, a session boundary, and a related
+subtopic are not reasons to split. The routing model can still misclassify a topic.
+Imported batches route as complete units, without internal segmentation.
 
-`ingest()` saves the original conversation before attempting to organize it.
-Each source has its own identity. Submitting different content under an existing
-node ID raises a conflict rather than replacing the stored conversation.
+Each new turn is stored in an immutable blob with stable coordinates. Appending
+does not rewrite earlier turns or create another graph node. Turn metadata can
+be paged without loading the entire appended conversation. A span read loads its
+own turn. A single enormous turn still requires loading that turn's blob.
 
-Organization searches for candidate conversations and asks a maintenance model
-to propose relationships supported by their evidence. For example, it might
-connect Database to Registry because both describe the same deployment. As new
-conversations arrive, this builds routes that later readers can investigate.
+The active topic participates in initial reading even when a follow-up lacks
+searchable keywords. Additional seeds and recursive children can investigate
+other nodes. Only selected evidence reaches the final main model context.
 
-`MaintenancePolicy` controls what happens to those proposals:
+## Model responsibilities
 
-| Mode | Behavior |
-| --- | --- |
-| `validated` | Publish proposals that pass reference and allowed-relationship checks. This is the default. |
-| `propose` | Return proposals for your application to review. |
-| `disabled` | Skip relationship discovery. |
+A small graph model chooses whether incoming turns extend an existing
+topic or begin a clearly unrelated topic. It also proposes generic connections
+between nodes. The reader model performs recursive reading and interprets
+what those connections mean for the current question. The main model produces
+the final answer. All three roles have independent model and provider settings.
+Graph names the model role. Graph maintenance names its work, configured through
+`MaintenancePolicy` and reported through `MaintenanceResult`. Reader models
+can run in many recursive child invocations. A child is an invocation, not an
+additional model role.
 
-The default checks establish that a proposal uses resolvable references and an
-allowed relationship label. The relationship itself is a model judgment. Choose
-`propose` if your application needs to review that judgment before publication.
+Both `answer()` and `ingest()` call the same topic routing and append operation.
+`answer()` then reads relevant evidence, answers, and appends the assistant reply.
+`ingest()` only catches up on supplied history. It routes each supplied batch
+as one unit, so it does not split a mixed-topic batch internally.
 
-The ingestion result reports storage and maintenance separately. For example,
-Registry can be stored successfully even if the maintenance model is unavailable.
-Its text is still searchable, and you can organize it later.
+## Connect topics
 
-Use `ingest(..., organize=False)` to skip organization for one call, or call
-`organize()` later. Retrying ingestion can run maintenance again even if the
-source was already saved. These operations discover edges. Your application
-records exact journal amendments separately. Answering can use these records
-and search for additional sources, but does not automatically publish new edges.
+New answer topics and ordinary imports can trigger bounded connection discovery.
+Every new primary connection is untyped, with source
+references explaining where it came from. The writer does not assign support,
+contradiction, dependency or replacement categories. The RLM interprets the
+connection when answering a particular question.
+
+`MaintenancePolicy` supports `validated`, `propose` and `disabled` modes.
+Validated mode publishes structurally supported connections. Propose mode returns
+them for application review. Disabled mode skips model organization and retains
+the active topic. `organize=False` skips import connection discovery while
+leaving topic routing enabled. Exact journal amendments remain separate explicit
+operations. Connection validation does not establish semantic correctness.
+
+## Preserve conversation and evidence history
+
+Incoming turns are saved before inference. Generation failure does not remove
+them. A nonempty returned reply is appended with the assistant role. Previous
+assistant replies remain fallible history, not independent factual confirmation.
+Read-only `answer(..., remember=False)` performs no conversation writes.
+An explicit `node_id` is available in that read-only mode.
+
+Conversation mutation is serialized for callers sharing a Workspace object.
+Independent handles must be coordinated by the application. The workspace
+persists active topic IDs across restarts. It does not provide response replay,
+whole-answer transactions, or a snapshot of the graph.
 
 ## How an answer runs
 
@@ -64,9 +87,9 @@ flowchart TD
     Seeds --> Backups[Backups delegate]
     Database --> Child[Registry child delegate]
     Child --> Database
-    Database --> Root[Root combines evidence and findings]
-    Backups --> Root
-    Root --> Result[Answer and evidence]
+    Database --> Main[Main combines evidence and findings]
+    Backups --> Main
+    Main --> Result[Answer and evidence]
 ```
 
 The diagram shows one possible investigation. A different question or passage
@@ -81,7 +104,7 @@ a ranking of Database, Database, Backups and Registry selects Database and
 Backups.
 
 `retrieval_k` limits the passage pool and `max_seed_nodes` limits the number
-of starting nodes. Passing `answer(..., node_id=...)` bypasses this search and
+of starting nodes. Passing `answer(..., remember=False, node_id=...)` bypasses this search and
 uses the named node as the only seed. The [node search guide](node-search.md)
 explains how to tune selection and inspect skipped nodes.
 
@@ -141,21 +164,21 @@ operations and distinguishes them from application Python.
 
 ### 4. Combine the returned evidence
 
-The root receives exact excerpts selected by the branches, with source
+The main model receives exact excerpts selected by the branches, with source
 references and available speaker and date metadata. Branch summaries follow
-those excerpts, so the root can check a finding against what was actually said.
+those excerpts, so the main model can check a finding against what was actually said.
 Retrieved or read passages that a branch did not return are not available to the
-root.
+main.
 
 In our example, the branches need to return the current database choice, the
 region statement and the seven-day backup policy. Finding a conversation called
 Backups is not enough. A delegate has to read and return the relevant policy text.
 
-The root makes one final model call. It has no further tool phase in the
-current `LLGM` pipeline. If no branch returns the backup policy, the root has
+The main model makes one final model call. It has no further tool phase in the
+current `LLGM` pipeline. If no branch returns the backup policy, the main model has
 no supported retention period to use.
 
-The library checks that the root's citations identify evidence returned by a
+The library checks that the main model's citations identify evidence returned by a
 branch. It cannot establish that the cited text supports every claim in the
 answer.
 
@@ -169,9 +192,9 @@ investigation from one that ran out of time or left a source unread.
 For example, Database may return the database choice while Backups fails before
 reading its policy. Successful findings remain available, and unrecovered
 failures remain visible. Another branch can resolve a delegate's missing-fact
-note, but the root cannot silently remove a required failure report.
+note, but the main model cannot silently remove a required failure report.
 
-An empty search produces a partial result without starting delegates. Nodes
+In read-only mode, an empty search produces a partial result without starting delegates. Nodes
 skipped by the initial seed limit also make the result partial. The
 [quickstart](quickstart.md#understand-the-result) shows result handling, including
 budget exhaustion and explicit abstention.
@@ -182,7 +205,7 @@ Seeds and children share one `Budget`. Increasing the number of seeds does
 not increase that budget. More branches leave less available work per branch
 unless you also raise the limits.
 
-The runtime reserves capacity for delegates to return findings and for the root
+The runtime reserves capacity for delegates to return findings and for the main model
 to write an answer. A provider failure, interpreter failure or expired deadline
 can still prevent completion. Required journals and selected evidence must fit
 their limits. The runtime reports a size problem rather than silently cutting
@@ -192,8 +215,9 @@ These limits control model calls, evidence, context and time. They do not impose
 a dollar spending cap. See [runtime limits](configuration.md#runtime-limits-and-usage)
 for the units and usage fields.
 
-Small model inputs also do not guarantee small storage reads. Resolving a short
-span currently loads its owning source into application memory. Operational
+Small model inputs also do not guarantee small storage reads. Appended source
+spans load one turn. Explicit immutable imports and legacy sources still load
+their base source blob into application memory. Operational
 journals are loaded in full, and retained source and journal history can keep
 growing on disk.
 

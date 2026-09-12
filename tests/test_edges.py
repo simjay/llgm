@@ -34,9 +34,7 @@ class EdgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def publish(self, **kwargs):
         """Create the standard directed relationship with caller-selected retry conditions."""
-        return await self.workspace.publish_edge(
-            "a", "b", relation="supports", provenance=self.provenance, **kwargs
-        )
+        return await self.workspace.publish_edge("a", "b", provenance=self.provenance, **kwargs)
 
     async def test_independent_directed_edges_and_reopen(self):
         """Primary adjacency needs no journal and retains exact provenance across reopen."""
@@ -45,7 +43,7 @@ class EdgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(edge.provenance, self.provenance)
         self.assertEqual(await self.workspace.edges("a"), [edge])
         self.assertEqual(await self.workspace.edges("b"), [])
-        self.assertEqual(await self.workspace.edges("a", "contradicts"), [])
+        self.assertFalse(hasattr(edge, "relation"))
         self.assertEqual(await self.workspace.inspect_journal("a"), [])
         self.assertEqual(await self.workspace.operational_journal("a"), [])
         self.assertEqual(
@@ -55,7 +53,7 @@ class EdgeTests(unittest.IsolatedAsyncioTestCase):
         await self.workspace.close()
         self.workspace = await Workspace.open(self.path).__aenter__()
         self.assertEqual(await self.workspace.edge(edge.edge_id), edge)
-        self.assertEqual(await self.workspace.edges("a", "supports"), [edge])
+        self.assertEqual(await self.workspace.edges("a"), [edge])
 
     async def test_concurrent_duplicates_and_retry_conflicts(self):
         """Concurrent publication deduplicates active identity and checks retry content independently."""
@@ -65,7 +63,6 @@ class EdgeTests(unittest.IsolatedAsyncioTestCase):
                 other.publish_edge(
                     "a",
                     "b",
-                    relation="supports",
                     provenance=self.provenance,
                     idempotency_key="right",
                 ),
@@ -74,7 +71,7 @@ class EdgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.publish(idempotency_key="left"), results[0])
         with self.assertRaises(ConflictError):
             await self.workspace.publish_edge(
-                "a", "c", relation="supports", provenance=self.provenance, idempotency_key="left"
+                "a", "c", provenance=self.provenance, idempotency_key="left"
             )
         self.assertEqual(len(await self.workspace.edges("a")), 1)
 
@@ -126,18 +123,13 @@ class EdgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_endpoints_support_and_atomic_failure(self):
         """Invalid references or a transaction failure cannot leave a partially published edge."""
         with self.assertRaises(SchemaError):
-            await self.workspace.publish_edge(
-                "a", "a", relation="supports", provenance=self.provenance
-            )
+            await self.workspace.publish_edge("a", "a", provenance=self.provenance)
         with self.assertRaises(ReferenceResolutionError):
-            await self.workspace.publish_edge(
-                "a", "missing", relation="supports", provenance=self.provenance
-            )
+            await self.workspace.publish_edge("a", "missing", provenance=self.provenance)
         with self.assertRaises(ReferenceResolutionError):
             await self.workspace.publish_edge(
                 "a",
                 "b",
-                relation="supports",
                 provenance=Provenance("user", "invalid", (SourceSpan("a", "t", 0, 999),)),
             )
         with patch.object(

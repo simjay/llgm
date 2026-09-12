@@ -37,7 +37,7 @@ def preflight_runtime(protocol: dict) -> dict:
             None,
             None,
             None,
-            maintenance_model=None,
+            graph_model=None,
             maintenance_policy=policy,
             inference_budget=budget,
             repl_config=docker,

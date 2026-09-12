@@ -75,19 +75,19 @@ async def setup(path):
     return workspace, evidence
 
 
-def make(root, sidecar, evidence, **options):
+def make(main, reader, evidence, **options):
     """Construct a runtime with controlled budgets and character-count accounting."""
     defaults = dict(
         budget=Budget(
             max_model_calls=30,
-            max_sidecar_calls=25,
+            max_reader_calls=25,
             max_bundle_tokens=8000,
             max_context_tokens=20000,
         ),
         token_counter=len,
     )
     defaults.update(options)
-    return RecursiveRuntime(root, sidecar, evidence, **defaults)
+    return RecursiveRuntime(main, reader, evidence, **defaults)
 
 
 def test_duplicate_operation_fields_fail_before_evidence_access():
@@ -95,10 +95,10 @@ def test_duplicate_operation_fields_fail_before_evidence_access():
 
     async def scenario():
         """Reject an otherwise valid final operation whose duplicate key makes its intent ambiguous."""
-        root = model(
+        main = model(
             '{"op":"read","op":"finish","answer":"guess","citations":[],"unresolved":["unknown"]}'
         )
-        result = await make(root, model(), None).answer("Question")
+        result = await make(main, model(), None).answer("Question")
         assert result.status == "failed"
         assert result.answer == "" and not result.references
         assert result.usage["model_calls"] == 1
@@ -114,19 +114,19 @@ def test_external_context_is_read_only_on_request_and_canonical_citations(tmp_pa
         """Read and cite one canonical source while leaving the distractor external."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(delegate("Read production registry", "c"), finish("eu-west-1", ["e1"]))
-            sidecar = model(read("c"), finish("Production: eu-west-1; staging: us-east-1", ["e1"]))
-            result = await make(root, sidecar, evidence).answer(
+            main = model(delegate("Read production registry", "c"), finish("eu-west-1", ["e1"]))
+            reader = model(read("c"), finish("Production: eu-west-1; staging: us-east-1", ["e1"]))
+            result = await make(main, reader, evidence).answer(
                 "Production region?", initial_refs=[NodeRef("c")]
             )
             assert result.status == "completed"
             assert result.references == (NodeRef("c"),)
-            for client in (root, sidecar):
+            for client in (main, reader):
                 initial = " ".join(m.content for m in client.requests[0].messages)
                 assert "Registry r17:" not in initial
-            prompts = str(root.requests) + str(sidecar.requests)
+            prompts = str(main.requests) + str(reader.requests)
             assert "hidden corpus sentinel" not in prompts
-            assert "Registry r17:" in sidecar.requests[1].messages[-1].content
+            assert "Registry r17:" in reader.requests[1].messages[-1].content
             assert result.usage["model_calls"] == 4
             assert result.usage["unknown_usage_calls"] == 4
         finally:
@@ -154,7 +154,6 @@ def test_node_queries_follow_graph_and_return_only_selected_span(tmp_path):
                 await ws.publish_edge(
                     owner,
                     target,
-                    relation="depends_on",
                     provenance=Provenance("user", "node-query-test"),
                 )
             requests = []
@@ -180,10 +179,10 @@ def test_node_queries_follow_graph_and_return_only_selected_span(tmp_path):
             decisions = iter(
                 (
                     read("local-a"),
-                    response("neighbors", node_id="local-a", relation="depends_on"),
+                    response("neighbors", node_id="local-a"),
                     query_neighbor,
                     read("b"),
-                    response("neighbors", node_id="b", relation="depends_on"),
+                    response("neighbors", node_id="b"),
                     query_neighbor,
                     read("c"),
                     read_turn,
@@ -200,18 +199,18 @@ def test_node_queries_follow_graph_and_return_only_selected_span(tmp_path):
                 decision = next(decisions)
                 return ModelResponse(decision(request) if callable(decision) else decision)
 
-            root = model(
+            main = model(
                 query_node("local-a", "Find the production region"), finish("eu-west-1", ["e5"])
             )
-            sidecar = CallableModelClient(decide)
-            result = await make(root, sidecar, evidence).answer("Which region?")
+            reader = CallableModelClient(decide)
+            result = await make(main, reader, evidence).answer("Which region?")
             assert result.status == "completed"
             assert len(result.references) == 1 and isinstance(result.references[0], SourceSpan)
             assert result.references[0].node_id == "c"
             assert (await ws.resolve(result.references[0])).text == "eu-west-1"
             assert long_text in str(requests)
-            assert "Unrelated local history sentinel" not in str(root.requests)
-            returned = json.loads(root.requests[1].messages[-1].content)
+            assert "Unrelated local history sentinel" not in str(main.requests)
+            returned = json.loads(main.requests[1].messages[-1].content)
             assert [item["text"] for item in returned["evidence"]] == ["eu-west-1"]
             assert returned["evidence"][0]["metadata"]["role"] == "user"
             initial = [
@@ -243,18 +242,18 @@ def test_node_queries_follow_graph_and_return_only_selected_span(tmp_path):
 
 
 def test_answer_can_start_at_one_node_without_loading_its_source(tmp_path):
-    """A public node target starts the root with a local handle and no preloaded text."""
+    """A public node target starts the main with a local handle and no preloaded text."""
 
     async def scenario():
         """Read the target explicitly and retain its identity throughout the trace."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(read("c"), finish("eu-west-1", ["e1"]))
-            result = await make(root, model(), evidence).answer("Which region?", node_id="c")
-            initial = json.loads(root.requests[0].messages[1].content)
+            main = model(read("c"), finish("eu-west-1", ["e1"]))
+            result = await make(main, model(), evidence).answer("Which region?", node_id="c")
+            initial = json.loads(main.requests[0].messages[1].content)
             assert initial["target_node_id"] == "c"
             assert initial["references"] == [reference_to_dict(NodeRef("c"))]
-            assert "Registry r17:" not in str(root.requests[0].messages)
+            assert "Registry r17:" not in str(main.requests[0].messages)
             assert "read_basis" not in initial
             assert result.status == "completed"
             assert all(
@@ -289,41 +288,40 @@ def test_node_operations_preserve_exact_identifier_bytes(tmp_path):
                 await ws.append_journal(
                     node_id,
                     subject=NodeRef(node_id),
-                    relation="depends_on",
+                    relation="note",
                     value=NodeRef(target),
                     provenance=Provenance("user", "identity-test"),
                 )
                 await ws.publish_edge(
                     node_id,
                     target,
-                    relation="depends_on",
                     provenance=Provenance("user", "identity-test"),
                 )
-            root = model(
+            main = model(
                 read(" padded "),
-                response("neighbors", node_id=" padded ", relation="depends_on"),
+                response("neighbors", node_id=" padded "),
                 response("journal", node_id=" padded "),
                 query_node(" padded ", " Child question "),
                 finish("Exact node", ["e1", "e2"]),
             )
-            sidecar = model(read(" padded "), finish("Exact node", ["e1"]))
-            result = await make(root, sidecar, evidence).answer(" Question ", node_id=" padded ")
+            reader = model(read(" padded "), finish("Exact node", ["e1"]))
+            result = await make(main, reader, evidence).answer(" Question ", node_id=" padded ")
             assert result.status == "completed"
-            initial = json.loads(root.requests[0].messages[1].content)
-            child_initial = json.loads(sidecar.requests[0].messages[1].content)
+            initial = json.loads(main.requests[0].messages[1].content)
+            child_initial = json.loads(reader.requests[0].messages[1].content)
             assert initial["question"] == "Question"
             assert child_initial["question"] == "Child question"
             for payload in (initial, child_initial):
                 assert payload["target_node_id"] == " padded "
                 assert payload["references"] == [reference_to_dict(NodeRef(" padded "))]
-            neighbors = json.loads(root.requests[2].messages[-1].content)
+            neighbors = json.loads(main.requests[2].messages[-1].content)
             assert neighbors["references"] == [reference_to_dict(NodeRef("c"))]
-            journal = json.loads(root.requests[3].messages[-1].content)
+            journal = json.loads(main.requests[3].messages[-1].content)
             assert all(
                 entry["references"][0]["node_id"] == " padded " for entry in journal["entries"]
             )
             assert {reference.node_id for reference in result.references} == {" padded "}
-            assert "Normalized decoy sentinel" not in str(root.requests) + str(sidecar.requests)
+            assert "Normalized decoy sentinel" not in str(main.requests) + str(reader.requests)
         finally:
             await evidence.close()
             await ws.close()
@@ -336,20 +334,20 @@ def test_invalid_node_target_fails_before_model_dispatch(node_id):
     """Malformed node targets fail before spending any model call."""
     from llgm.core.errors import SchemaError
 
-    root = model()
+    main = model()
     with pytest.raises(SchemaError, match="node_id"):
-        run(make(root, model(), None).answer("Question", node_id=node_id))
-    assert not root.requests
+        run(make(main, model(), None).answer("Question", node_id=node_id))
+    assert not main.requests
 
 
 def test_node_target_cannot_mix_with_experimental_initial_references():
     """A node target has exactly one initial handle and rejects ambiguous extra context."""
     from llgm.core.errors import SchemaError
 
-    root = model()
+    main = model()
     with pytest.raises(SchemaError, match="cannot be combined"):
-        run(make(root, model(), None).answer("Question", node_id="a", initial_refs=[NodeRef("b")]))
-    assert not root.requests
+        run(make(main, model(), None).answer("Question", node_id="a", initial_refs=[NodeRef("b")]))
+    assert not main.requests
 
 
 def test_node_query_repeated_active_request_stops_before_child_dispatch(tmp_path):
@@ -359,14 +357,14 @@ def test_node_query_repeated_active_request_stops_before_child_dispatch(tmp_path
         """Attempt to recursively ask the same question of the current target."""
         ws, evidence = await setup(tmp_path)
         try:
-            sidecar = model()
-            result = await make(model(query_node("c", "Question")), sidecar, evidence).answer(
+            reader = model()
+            result = await make(model(query_node("c", "Question")), reader, evidence).answer(
                 "Question", node_id="c"
             )
             assert result.status == "budget_exhausted"
             assert "Repeated active recursive request" in result.evidence.unresolved[0]
             assert result.usage["model_calls"] == 1
-            assert not sidecar.requests
+            assert not reader.requests
         finally:
             await evidence.close()
             await ws.close()
@@ -381,16 +379,16 @@ def test_node_queries_obey_shared_limits(tmp_path, options):
     """Addressing a node does not bypass global call, operation, or depth limits."""
 
     async def scenario():
-        """Stop a node query at the boundary without dispatching a sidecar call."""
+        """Stop a node query at the boundary without dispatching a reader call."""
         ws, evidence = await setup(tmp_path)
         try:
-            sidecar = model()
+            reader = model()
             result = await make(
-                model(query_node("c", "Read region")), sidecar, evidence, **options
+                model(query_node("c", "Read region")), reader, evidence, **options
             ).answer("Question")
             assert result.status == "budget_exhausted"
             assert result.usage["model_calls"] == 1
-            assert not sidecar.requests
+            assert not reader.requests
         finally:
             await evidence.close()
             await ws.close()
@@ -405,9 +403,9 @@ def test_node_query_child_cannot_cite_sibling_evidence(tmp_path):
         """Reject a second node's citation to an ID exposed only to its sibling."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(query_node("c", "First"), query_node("d", "Second"))
-            sidecar = model(read("c"), finish("region", ["e1"]), finish("stolen", ["e1"]))
-            result = await make(root, sidecar, evidence).answer("Question")
+            main = model(query_node("c", "First"), query_node("d", "Second"))
+            reader = model(read("c"), finish("region", ["e1"]), finish("stolen", ["e1"]))
+            result = await make(main, reader, evidence).answer("Question")
             assert result.status == "failed"
             assert "not exposed" in result.evidence.unresolved[0]
         finally:
@@ -424,19 +422,19 @@ def test_node_query_missing_source_returns_explicit_gap(tmp_path):
         """Resolve the target on demand and propagate the child's explicit missing-source gap."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(
+            main = model(
                 query_node("missing", "Find its region"),
                 finish("Cannot determine", unresolved=["Target source unavailable"]),
             )
-            sidecar = model(
+            reader = model(
                 read("missing"),
                 finish("Cannot determine", unresolved=["Target source unavailable"]),
             )
-            result = await make(root, sidecar, evidence).answer("Question")
+            result = await make(main, reader, evidence).answer("Question")
             assert result.status == "partial"
             assert not result.references
-            assert json.loads(sidecar.requests[1].messages[-1].content)["error"] == "unavailable"
-            assert json.loads(root.requests[1].messages[-1].content)["unresolved"] == [
+            assert json.loads(reader.requests[1].messages[-1].content)["error"] == "unavailable"
+            assert json.loads(main.requests[1].messages[-1].content)["unresolved"] == [
                 "Target source unavailable"
             ]
         finally:
@@ -453,10 +451,10 @@ def test_recursive_relay_returns_along_actual_parent_chain(tmp_path):
         """Follow a three-level release lookup and propagate the same query date to every child."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(
+            main = model(
                 delegate("Resolve Cedar", "a"), finish("Production eu-west-1", ["e1", "e2", "e3"])
             )
-            sidecar = model(
+            reader = model(
                 read("a"),
                 delegate("Resolve release r17", "b"),
                 read("b"),
@@ -466,7 +464,7 @@ def test_recursive_relay_returns_along_actual_parent_chain(tmp_path):
                 finish("r17 production eu-west-1", ["e2", "e3"]),
                 finish("Cedar production eu-west-1", ["e1", "e2", "e3"]),
             )
-            result = await make(root, sidecar, evidence).answer(
+            result = await make(main, reader, evidence).answer(
                 "Where?", query_date="2031-05-01", query_scope={"environment": "production"}
             )
             enters = [e for e in result.trace if e["kind"] == "enter"]
@@ -480,7 +478,7 @@ def test_recursive_relay_returns_along_actual_parent_chain(tmp_path):
             assert returns == ["q4", "q3", "q2", "q1"]
             assert result.status == "completed"
             assert {r.node_id for r in result.references} == {"a", "b", "c"}
-            for request in root.requests + sidecar.requests:
+            for request in main.requests + reader.requests:
                 assert json.loads(request.messages[1].content)["query_date"] == "2031-05-01"
                 assert json.loads(request.messages[1].content)["query_scope"] == {
                     "environment": "production"
@@ -491,25 +489,25 @@ def test_recursive_relay_returns_along_actual_parent_chain(tmp_path):
     run(scenario())
 
 
-def test_root_continues_and_combines_siblings_without_inheriting_context(tmp_path):
-    """The root can combine siblings without exposing one child's context to another."""
+def test_main_continues_and_combines_siblings_without_inheriting_context(tmp_path):
+    """The main can combine siblings without exposing one child's context to another."""
 
     async def scenario():
         """Gather region and rollout date in separate child invocations."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(
+            main = model(
                 delegate("Get region", "c"),
                 delegate("Get date", "d"),
                 finish("eu-west-1 on 2031-04-07", ["e1", "e2"]),
             )
-            sidecar = model(
+            reader = model(
                 read("c"), finish("eu-west-1", ["e1"]), read("d"), finish("2031-04-07", ["e2"])
             )
-            result = await make(root, sidecar, evidence).answer("Where and when?")
+            result = await make(main, reader, evidence).answer("Where and when?")
             assert result.status == "completed"
-            assert len(root.requests) == 3
-            second_child = sidecar.requests[2]
+            assert len(main.requests) == 3
+            second_child = reader.requests[2]
             assert "Registry r17:" not in str(second_child.messages)
             assert "eu-west-1" not in str(second_child.messages)
             assert [e["parent_id"] for e in result.trace if e["kind"] == "enter"][1:] == [
@@ -529,9 +527,9 @@ def test_child_cannot_cite_evidence_seen_only_by_its_sibling(tmp_path):
         """Make the second child return an evidence ID it never received."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(delegate("First", "c"), delegate("Second", "d"))
-            sidecar = model(read("c"), finish("region", ["e1"]), finish("stolen evidence", ["e1"]))
-            result = await make(root, sidecar, evidence).answer("Question")
+            main = model(delegate("First", "c"), delegate("Second", "d"))
+            reader = model(read("c"), finish("region", ["e1"]), finish("stolen evidence", ["e1"]))
+            result = await make(main, reader, evidence).answer("Question")
             assert result.status == "failed"
             assert "not exposed" in result.evidence.unresolved[0]
         finally:
@@ -564,10 +562,10 @@ def test_invalid_operation_and_unsupported_citations_fail_without_repair(tmp_pat
         """Submit one invalid operation and verify the runtime returns no invented answer."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(finish_response)
-            result = await make(root, model(), evidence).answer("Question")
+            main = model(finish_response)
+            result = await make(main, model(), evidence).answer("Question")
             assert result.status == "failed"
-            assert len(root.requests) == 1
+            assert len(main.requests) == 1
             assert result.answer == ""
             assert not any(e["kind"] == "return" for e in result.trace)
         finally:
@@ -583,13 +581,13 @@ def test_missing_evidence_can_be_reported_without_invented_answer(tmp_path):
         """Read an absent node before reporting the remaining information gap."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(
+            main = model(
                 read("missing"), finish("Cannot determine", unresolved=["Source unavailable"])
             )
-            result = await make(root, model(), evidence).answer("Question")
+            result = await make(main, model(), evidence).answer("Question")
             assert result.status == "partial"
             assert result.references == ()
-            assert '"error": "unavailable"' in root.requests[1].messages[-1].content
+            assert '"error": "unavailable"' in main.requests[1].messages[-1].content
         finally:
             await ws.close()
 
@@ -603,11 +601,9 @@ def test_shared_source_reads_deduplicate_exposure_but_not_model_cost(tmp_path):
         """Read the same source in two children and compare exposure with a single read."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(delegate("First", "c"), delegate("Second", "c"), finish("region", ["e1"]))
-            sidecar = model(
-                read("c"), finish("region", ["e1"]), read("c"), finish("region", ["e1"])
-            )
-            result = await make(root, sidecar, evidence).answer("Question")
+            main = model(delegate("First", "c"), delegate("Second", "c"), finish("region", ["e1"]))
+            reader = model(read("c"), finish("region", ["e1"]), read("c"), finish("region", ["e1"]))
+            result = await make(main, reader, evidence).answer("Question")
             assert result.status == "completed"
             single = await make(
                 model(read("c"), finish("region", ["e1"])), model(), evidence
@@ -638,9 +634,9 @@ def test_recursive_limits_terminate_explicitly(tmp_path, options, reason):
         """Attempt one delegation under each independently tightened execution limit."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(delegate("child", "c"))
-            sidecar = model(read("c"), finish("region", ["e1"]))
-            result = await make(root, sidecar, evidence, **options).answer("Question")
+            main = model(delegate("child", "c"))
+            reader = model(read("c"), finish("region", ["e1"]))
+            result = await make(main, reader, evidence, **options).answer("Question")
             assert result.status == "budget_exhausted"
             assert reason.lower() in result.evidence.unresolved[0].lower()
         finally:
@@ -656,8 +652,8 @@ def test_active_request_cycle_stops_without_infinite_recursion(tmp_path):
         """Delegate the same question and handles already present on the active ancestry."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(delegate("Question", "c"))
-            result = await make(root, model(), evidence).answer(
+            main = model(delegate("Question", "c"))
+            result = await make(main, model(), evidence).answer(
                 "Question", initial_refs=[NodeRef("c")]
             )
             assert result.status == "budget_exhausted"
@@ -672,30 +668,30 @@ def test_active_request_cycle_stops_without_infinite_recursion(tmp_path):
     "field,value,reason",
     [
         ("max_model_calls", 2, "Model-call"),
-        ("max_sidecar_calls", 1, "Sidecar-call"),
+        ("max_reader_calls", 1, "Reader-call"),
         ("max_evidence_tokens", 1, "Evidence exposure"),
         ("max_bundle_tokens", 1, "bundle"),
         ("max_context_tokens", 1, "context"),
     ],
 )
 def test_shared_budget_boundaries(tmp_path, field, value, reason):
-    """Model, sidecar, evidence, bundle and context allowances share one run ledger."""
+    """Model, reader, evidence, bundle and context allowances share one run ledger."""
 
     async def scenario():
         """Tighten one resource bound around a child read and inspect the stopping reason."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(delegate("child", "c"), finish("region", ["e1"]))
-            sidecar = model(read("c"), finish("region", ["e1"]))
+            main = model(delegate("child", "c"), finish("region", ["e1"]))
+            reader = model(read("c"), finish("region", ["e1"]))
             budget = replace(Budget(), **{field: value})
-            result = await make(root, sidecar, evidence, budget=budget).answer("Question")
+            result = await make(main, reader, evidence, budget=budget).answer("Question")
             assert result.status == "budget_exhausted"
             assert reason.lower() in result.evidence.unresolved[0].lower()
             if field == "max_context_tokens":
                 assert result.usage["model_calls"] == 0
             if field == "max_evidence_tokens":
                 assert result.usage["evidence_accounting_units"] == 0
-                assert "Registry r17:" not in str(sidecar.requests)
+                assert "Registry r17:" not in str(reader.requests)
         finally:
             await ws.close()
 
@@ -706,7 +702,7 @@ def test_timeout_in_descendant_counts_attempt_and_stops_execution(tmp_path):
     """A descendant timeout cancels its provider work and retains the attempted call."""
 
     async def scenario():
-        """Let the child exceed a short deadline after root delegation."""
+        """Let the child exceed a short deadline after main delegation."""
         ws, evidence = await setup(tmp_path)
         try:
             stopped = asyncio.Event()
@@ -718,9 +714,9 @@ def test_timeout_in_descendant_counts_attempt_and_stops_execution(tmp_path):
                 finally:
                     stopped.set()
 
-            root = model(delegate("child", "c"))
+            main = model(delegate("child", "c"))
             runtime = make(
-                root, CallableModelClient(slow), evidence, budget=Budget(timeout_seconds=0.05)
+                main, CallableModelClient(slow), evidence, budget=Budget(timeout_seconds=0.05)
             )
             result = await runtime.answer("Question")
             assert result.status == "budget_exhausted"
@@ -761,7 +757,7 @@ def test_cancellation_propagates_to_child_and_runtime_can_be_reused(tmp_path):
             assert stopped.is_set()
             assert runtime.last_usage["model_calls"] == 2
             assert any(e.get("status") == "cancelled" for e in runtime.last_trace)
-            runtime.root_model = model(finish("Unknown", unresolved=["No source"]))
+            runtime.main_model = model(finish("Unknown", unresolved=["No source"]))
             assert (await runtime.answer("New question")).status == "partial"
         finally:
             await ws.close()
@@ -773,14 +769,14 @@ def test_provider_failure_and_known_cached_usage_survive_recursion(tmp_path):
     """Recursive failures retain known usage and provider-specific cached-input categories."""
 
     async def scenario():
-        """Return a billed incomplete child response after a billed root delegation."""
+        """Return a billed incomplete child response after a billed main delegation."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(
+            main = model(
                 ModelResponse(delegate("child", "c"), Usage(10, 5, {"cached_input_tokens": 4}))
             )
-            sidecar = model(ModelResponse("", Usage(7, 2), provider="test", status="incomplete"))
-            result = await make(root, sidecar, evidence).answer("Question")
+            reader = model(ModelResponse("", Usage(7, 2), provider="test", status="incomplete"))
+            result = await make(main, reader, evidence).answer("Question")
             assert result.status == "failed"
             assert result.usage["known_input_tokens"] == 17
             assert result.usage["known_output_tokens"] == 7
@@ -806,14 +802,14 @@ def test_distinct_correction_node_preserves_original_evidence(tmp_path):
                     node_id="correction",
                 )
             )
-            root = model(
+            main = model(
                 response("read", reference=reference_to_dict(NodeRef("c"))),
                 finish("eu-west-1", ["e1"]),
             )
-            result = await make(root, model(), evidence).answer("Question")
+            result = await make(main, model(), evidence).answer("Question")
             assert result.status == "completed"
             assert result.references == (NodeRef("c"),)
-            assert "ap-south-1" not in str(root.requests)
+            assert "ap-south-1" not in str(main.requests)
         finally:
             await ws.close()
 
@@ -839,13 +835,13 @@ def test_journal_inline_and_pointer_evidence_can_be_read_and_cited(tmp_path):
             link = await ws.append_journal(
                 "a",
                 subject=NodeRef("a"),
-                relation="depends_on",
+                relation="note",
                 value=NodeRef("b"),
                 provenance=Provenance("user", "test"),
             )
             evidence = await Evidence.open(ws)
-            root = model(response("journal", node_id="a"), finish("Suggestion only", ["e1", "e2"]))
-            result = await make(root, model(), evidence).answer("Is it adopted?")
+            main = model(response("journal", node_id="a"), finish("Suggestion only", ["e1", "e2"]))
+            result = await make(main, model(), evidence).answer("Is it adopted?")
             assert result.status == "completed"
             assert set(result.references) == {
                 JournalRef("a", entry.entry_id),
@@ -867,22 +863,20 @@ def test_graph_neighbors_are_handles_until_the_model_reads_them(tmp_path):
 
         ws, _ = await setup(tmp_path)
         try:
-            await ws.publish_edge(
-                "a", "c", relation="depends_on", provenance=Provenance("user", "test")
-            )
+            await ws.publish_edge("a", "c", provenance=Provenance("user", "test"))
             evidence = await Evidence.open(ws)
-            root = model(
-                response("neighbors", node_id="a", relation="depends_on"),
+            main = model(
+                response("neighbors", node_id="a"),
                 read("c"),
                 finish("production eu-west-1", ["e1"]),
             )
-            result = await make(root, model(), evidence).answer("Question")
+            result = await make(main, model(), evidence).answer("Question")
             assert result.status == "completed"
-            assert json.loads(root.requests[1].messages[-1].content)["references"] == [
+            assert json.loads(main.requests[1].messages[-1].content)["references"] == [
                 reference_to_dict(NodeRef("c"))
             ]
-            assert "Registry r17:" not in root.requests[1].messages[-1].content
-            assert "Registry r17:" in root.requests[2].messages[-1].content
+            assert "Registry r17:" not in main.requests[1].messages[-1].content
+            assert "Registry r17:" in main.requests[2].messages[-1].content
         finally:
             await ws.close()
 
@@ -898,8 +892,8 @@ def test_search_uses_real_index_and_passage_references(tmp_path):
 
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(response("search", query="rollout", k=1), finish("2031-04-07", ["e1"]))
-            result = await make(root, model(), evidence).answer("When is rollout?")
+            main = model(response("search", query="rollout", k=1), finish("2031-04-07", ["e1"]))
+            result = await make(main, model(), evidence).answer("When is rollout?")
             assert result.status == "completed"
             assert result.usage["searches"] == 1
             assert len(result.references) == 1
@@ -920,13 +914,13 @@ def test_search_budget_is_global_across_sibling_invocations(tmp_path):
         """Exhaust the one-search allowance in the first child before the second searches."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(delegate("First"), delegate("Second"))
-            sidecar = model(
+            main = model(delegate("First"), delegate("Second"))
+            reader = model(
                 response("search", query="rollout", k=1),
                 finish("date", ["e1"]),
                 response("search", query="registry", k=1),
             )
-            result = await make(root, sidecar, evidence, budget=Budget(max_searches=1)).answer(
+            result = await make(main, reader, evidence, budget=Budget(max_searches=1)).answer(
                 "Question"
             )
             assert result.status == "budget_exhausted"
@@ -939,21 +933,21 @@ def test_search_budget_is_global_across_sibling_invocations(tmp_path):
     run(scenario())
 
 
-def test_child_budget_leaves_one_call_for_root_final_answer(tmp_path):
-    """A completed child can leave exactly one remaining call for the root's final answer."""
+def test_child_budget_leaves_one_call_for_main_final_answer(tmp_path):
+    """A completed child can leave exactly one remaining call for the main's final answer."""
 
     async def scenario():
-        """Fit delegation, child read/return and root completion into four calls."""
+        """Fit delegation, child read/return and main completion into four calls."""
         ws, evidence = await setup(tmp_path)
         try:
-            root = model(delegate("child", "c"), finish("region", ["e1"]))
-            sidecar = model(read("c"), finish("region", ["e1"]))
-            result = await make(root, sidecar, evidence, budget=Budget(max_model_calls=4)).answer(
+            main = model(delegate("child", "c"), finish("region", ["e1"]))
+            reader = model(read("c"), finish("region", ["e1"]))
+            result = await make(main, reader, evidence, budget=Budget(max_model_calls=4)).answer(
                 "Question"
             )
             assert result.status == "completed"
             assert result.usage["model_calls"] == 4
-            assert result.usage["sidecar_calls"] == 2
+            assert result.usage["reader_calls"] == 2
         finally:
             await evidence.close()
             await ws.close()
@@ -965,7 +959,7 @@ def test_read_timeout_cancels_tool_and_retains_model_attempt(tmp_path):
     """A timed-out evidence operation is cancelled without losing its preceding model call."""
 
     async def scenario():
-        """Suspend a source read after the root has requested it."""
+        """Suspend a source read after the main has requested it."""
         ws, evidence = await setup(tmp_path)
         try:
             stopped = asyncio.Event()
@@ -980,9 +974,9 @@ def test_read_timeout_cancels_tool_and_retains_model_attempt(tmp_path):
                     finally:
                         stopped.set()
 
-            root = model(read("c"))
+            main = model(read("c"))
             result = await make(
-                root, model(), SlowEvidence(), budget=Budget(timeout_seconds=0.05)
+                main, model(), SlowEvidence(), budget=Budget(timeout_seconds=0.05)
             ).answer("Question")
             assert result.status == "budget_exhausted"
             assert stopped.is_set()
@@ -1022,13 +1016,13 @@ def test_dates_and_speaker_metadata_survive_child_evidence_return(tmp_path, oper
                     if operation == "read"
                     else response("search", query="Deployment", k=1)
                 )
-                root = model(
+                main = model(
                     delegate("Resolve relative date", "dated"), finish("2031-04-07", ["e1"])
                 )
-                sidecar = model(op, finish("2031-04-07", ["e1"]))
-                result = await make(root, sidecar, evidence).answer("When?")
+                reader = model(op, finish("2031-04-07", ["e1"]))
+                result = await make(main, reader, evidence).answer("When?")
                 assert result.status == "completed"
-                for request in (sidecar.requests[1], root.requests[1]):
+                for request in (reader.requests[1], main.requests[1]):
                     payload = request.messages[-1].content
                     assert "2031-04-06" in payload
                     assert '"role": "user"' in payload
@@ -1039,14 +1033,14 @@ def test_dates_and_speaker_metadata_survive_child_evidence_return(tmp_path, oper
 
 @pytest.mark.parametrize("bad_date", [True, 17, {}, [], ""])
 def test_invalid_query_date_is_rejected_before_any_model_call(bad_date):
-    """Malformed query dates fail before any root request is dispatched."""
+    """Malformed query dates fail before any main request is dispatched."""
     from llgm.core.errors import SchemaError
 
-    root = model()
-    runtime = make(root, model(), None)
+    main = model()
+    runtime = make(main, model(), None)
     with pytest.raises(SchemaError, match="query_date"):
         run(runtime.answer("Question", query_date=bad_date))
-    assert not root.requests
+    assert not main.requests
 
 
 def test_expired_tool_deadline_does_not_start_or_leak_a_coroutine():
@@ -1079,11 +1073,11 @@ def test_invalid_query_scope_is_rejected_before_model_calls(scope):
     """Invalid scope metadata fails before evidence access or provider dispatch."""
     from llgm.core.errors import SchemaError
 
-    root = model()
-    runtime = make(root, model(), None)
+    main = model()
+    runtime = make(main, model(), None)
     with pytest.raises(SchemaError, match="query_scope"):
         run(runtime.answer("Question", query_scope=scope))
-    assert root.requests == []
+    assert main.requests == []
 
 
 @pytest.mark.parametrize("capture", [False, True])

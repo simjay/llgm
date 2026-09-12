@@ -27,7 +27,7 @@ Python, so use the real Docker checks for that boundary.
 - Schedule every admitted seed. Isolate child context, preserve delivered
   findings, and reject citations that were not returned to their recipient.
 - Exercise exhausted limits, cancellation and cleanup. Distinguish a branch's
-  missing fact from required failures that the root must retain.
+  missing fact from required failures that the main must retain.
 - Check ownership, configuration precedence, provider response validation and
   the difference between known usage, missing usage and estimated cost.
 

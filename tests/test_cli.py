@@ -22,7 +22,13 @@ def test_ask_cli_forwards_scope_time_and_returns_canonical_evidence(tmp_path, ca
         received.append(settings)
         models = Models()
         async with Workspace.open(settings.workspace_path) as workspace:
-            app = LLGM(workspace, models.root, models.sidecar, repl_factory=ReplayFactory())
+            app = LLGM(
+                workspace,
+                models.main,
+                models.reader,
+                graph_model=models.reader,
+                repl_factory=ReplayFactory(),
+            )
             await app.ingest(
                 Conversation.from_turns(
                     [{"role": "user", "turn_id": "t", "text": "Orion region is eu-west-1"}],
@@ -39,6 +45,7 @@ def test_ask_cli_forwards_scope_time_and_returns_canonical_evidence(tmp_path, ca
             [
                 "ask",
                 "Orion region",
+                "--read-only",
                 "--workspace",
                 str(tmp_path / "memory"),
                 "--scope",
@@ -81,15 +88,15 @@ def test_ask_cli_loads_explicit_env_file_before_settings(tmp_path, capsys, monke
 
     from llgm import LLGM
 
-    environment = {"LLGM_ROOT_MODEL": "exported-root", "OPENAI_API_KEY": "exported-key-fixture"}
+    environment = {"LLGM_MAIN_MODEL": "exported-main", "OPENAI_API_KEY": "exported-key-fixture"}
     monkeypatch.setattr(os, "environ", environment)
     env_file = tmp_path / "local.env"
     env_file.write_text(
-        "LLGM_ROOT_MODEL=local-root\n"
-        "LLGM_SIDECAR_MODEL=local-sidecar\n"
+        "LLGM_MAIN_MODEL=local-main\n"
+        "LLGM_READER_MODEL=local-reader\n"
         "LLGM_MAX_SEARCHES=2\n"
         "OPENAI_API_KEY=local-key-fixture\n"
-        "ANTHROPIC_API_KEY=local-sidecar-key-fixture\n",
+        "ANTHROPIC_API_KEY=local-reader-key-fixture\n",
         encoding="utf-8",
     )
     config_file = tmp_path / "llgm.toml"
@@ -113,7 +120,7 @@ def test_ask_cli_loads_explicit_env_file_before_settings(tmp_path, capsys, monke
         """Capture final configuration at the application resource boundary."""
         received.append(settings)
         assert os.environ["OPENAI_API_KEY"] == "exported-key-fixture"
-        assert os.environ["ANTHROPIC_API_KEY"] == "local-sidecar-key-fixture"
+        assert os.environ["ANTHROPIC_API_KEY"] == "local-reader-key-fixture"
         yield SimpleNamespace(answer=answer)
 
     monkeypatch.setattr(LLGM, "from_settings", configured)
@@ -134,12 +141,12 @@ def test_ask_cli_loads_explicit_env_file_before_settings(tmp_path, capsys, monke
         == 0
     )
     settings = received[0]
-    assert settings.root_model == "exported-root"
-    assert settings.sidecar_model == "local-sidecar"
+    assert settings.main_model == "exported-main"
+    assert settings.reader_model == "local-reader"
     assert settings.max_searches == 3
     assert settings.workspace_path == str(workspace)
-    assert settings.field_sources["root_model"] == "environment"
-    assert settings.field_sources["sidecar_model"] == "environment"
+    assert settings.field_sources["main_model"] == "environment"
+    assert settings.field_sources["reader_model"] == "environment"
     assert settings.field_sources["max_searches"] == "file"
     assert settings.field_sources["workspace_path"] == "explicit"
     output = capsys.readouterr()

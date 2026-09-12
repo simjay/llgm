@@ -56,14 +56,26 @@ def checkpoint(path: Path, value: dict) -> None:
 
 def prepare(protocol: dict, root: Path) -> tuple[list[EvaluationCase], dict]:
     """Verify dataset and judge identities, then remove benchmark source-ID cues."""
-    if protocol.get("schema_version") != 1 or protocol.get("repetitions") != 1:
-        raise ConfigurationError("Expected the one-attempt LongMemEval protocol")
+    if protocol.get("schema_version") != 2 or protocol.get("repetitions") != 1:
+        raise ConfigurationError("Expected the version-2 one-attempt LongMemEval protocol")
+    roles = {"main", "reader", "graph", "judge"}
+    models, pricing = protocol.get("models"), protocol.get("pricing")
+    if (
+        not isinstance(models, dict)
+        or set(models) != roles
+        or any(not isinstance(model, str) or not model.strip() for model in models.values())
+        or not isinstance(pricing, dict)
+        or set(pricing) != roles
+    ):
+        raise ConfigurationError(
+            "Benchmark models and pricing require main, reader, graph, and judge"
+        )
     arms = protocol.get("arms", [])
     if not arms or len(set(arms)) != len(arms) or set(arms) - set(ARMS):
         raise ConfigurationError("Unknown or duplicate benchmark arms")
-    effort = protocol.get("root_reasoning_effort")
+    effort = protocol.get("main_reasoning_effort")
     if effort is not None and (not isinstance(effort, str) or not effort.strip()):
-        raise ConfigurationError("root_reasoning_effort must be a nonblank string")
+        raise ConfigurationError("main_reasoning_effort must be a nonblank string")
     for key in ("dataset", "judge"):
         spec = protocol[key]
         if digest(root / spec["path"]) != spec["sha256"]:
@@ -111,12 +123,35 @@ async def ingest_history(
     if maintenance is None:
         maintenance = []
     for source in sources:
-        outcome = await app.ingest(
-            Conversation(source.turns, metadata=source.metadata, timestamp_ms=source.timestamp_ms),
-            organize=organize,
+        conversation = Conversation(
+            source.turns, metadata=source.metadata, timestamp_ms=source.timestamp_ms
         )
-        stored.append(replace(source, node_id=outcome.source.node_id))
-        maintenance.append(asdict(outcome.maintenance))
+        if organize:
+            outcome = await app.ingest(conversation, conversation_id="benchmark-history")
+            maintenance.append(asdict(outcome.maintenance))
+            page = await app.workspace.source_info(outcome.source.node_id, limit=1)
+            # Preserve session attribution for evaluation even when multiple
+            # sessions share a graph node. These are source views, not new nodes.
+            offset = page["total_turns"] - len(source.turns)
+            ids = []
+            while len(ids) < len(source.turns):
+                page = await app.workspace.source_info(
+                    outcome.source.node_id, offset=offset + len(ids), limit=128
+                )
+                ids.extend(item["turn_id"] for item in page["turns"])
+            stored.append(
+                replace(
+                    source,
+                    node_id=outcome.source.node_id,
+                    turns=tuple(
+                        replace(turn, turn_id=identity) for turn, identity in zip(source.turns, ids)
+                    ),
+                )
+            )
+        else:
+            outcome = await app.workspace.ingest(conversation)
+            stored.append(replace(source, node_id=outcome.node_id))
+            maintenance.append({"status": "disabled"})
     return tuple(stored), maintenance
 
 
@@ -152,7 +187,7 @@ async def run_trial(case, arm, protocol, directory, clients, allowance, *, pacin
                 call_metadata=call_metadata,
                 pacing=pacing,
                 temperature=None
-                if role == "root" and protocol.get("root_reasoning_effort") not in (None, "none")
+                if role == "main" and protocol.get("main_reasoning_effort") not in (None, "none")
                 else 0,
             )
             for role, client in clients.items()
@@ -162,9 +197,9 @@ async def run_trial(case, arm, protocol, directory, clients, allowance, *, pacin
             policy = protocol["maintenance"]
             app = LLGM(
                 workspace,
-                models["root"],
-                models["sidecar"],
-                maintenance_model=models["maintenance"],
+                models["main"],
+                models["reader"],
+                graph_model=models["graph"],
                 maintenance_policy=MaintenancePolicy(
                     **{key: value for key, value in policy.items() if key != "budget"},
                     budget=Budget(**policy["budget"]),
@@ -183,15 +218,20 @@ async def run_trial(case, arm, protocol, directory, clients, allowance, *, pacin
                 call["phase"] = "construction"
             construction_calls = len(record["model_calls"])
             record["construction_status_counts"] = dict(Counter(x["status"] for x in maintenance))
-            record["sources"] = len(sources)
-            record["primary_edges"] = sum([len(await workspace.edges(s.node_id)) for s in sources])
+            record["sources"] = len(await workspace.source_ids())
+            record["session_occurrences"] = len(sources)
+            record["primary_edges"] = sum(
+                [len(await workspace.edges(n)) for n in await workspace.source_ids()]
+            )
             record["journal_amendments"] = 0
             actual_case = replace(case, sources=sources)
             phase = "query"
             call_metadata["phase"] = phase
             query_started = time.perf_counter()
             if arm == "llgm":
-                result = await app.answer(case.question, query_date=case.question_date)
+                result = await app.answer(
+                    case.question, query_date=case.question_date, remember=False
+                )
                 record.update(
                     answer=result.answer,
                     status=result.status,
@@ -203,7 +243,7 @@ async def run_trial(case, arm, protocol, directory, clients, allowance, *, pacin
             else:
                 record.update(
                     await answer_baseline(
-                        arm, workspace, actual_case, models["root"], protocol["reader"]
+                        arm, workspace, actual_case, models["main"], protocol["reader"]
                     )
                 )
             record["query_seconds"] = time.perf_counter() - query_started
@@ -318,9 +358,7 @@ def report(directory: Path) -> dict:
                 if name in call and call[name] != value:
                     raise ConfigurationError("Call identity disagrees with its owning attempt")
                 call.setdefault(name, value)
-            call.setdefault(
-                "phase", "construction" if call.get("role") == "maintenance" else "query"
-            )
+            call.setdefault("phase", "construction" if call.get("role") == "graph" else "query")
         return list(calls.values())
 
     def metrics(planned, trials, judgments):
@@ -554,8 +592,8 @@ async def execute(protocol: dict, root: Path, directory: Path) -> dict:
                     timeout_seconds=protocol["limits"]["timeout_seconds_per_call"],
                     **({"base_url": "https://api.openai.com/v1"} if role == "judge" else {}),
                     **(
-                        {"reasoning_effort": protocol["root_reasoning_effort"]}
-                        if role == "root" and protocol.get("root_reasoning_effort") is not None
+                        {"reasoning_effort": protocol["main_reasoning_effort"]}
+                        if role == "main" and protocol.get("main_reasoning_effort") is not None
                         else {}
                     ),
                 )

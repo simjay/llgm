@@ -119,7 +119,7 @@ def test_recording_preserves_failed_response_usage(tmp_path):
 
         allowance, trial = Allowance(1), {"model_calls": []}
         client = recorded_model(
-            CallableModelClient(respond), "root", PRICING, allowance, trial, tmp_path
+            CallableModelClient(respond), "main", PRICING, allowance, trial, tmp_path
         )
         response = await client.complete(REQUEST)
         assert response.status == "incomplete"
@@ -150,7 +150,7 @@ def test_recording_explicit_none_temperature_preserves_actual_and_durable_reques
         allowance, trial = Allowance(1), {"model_calls": []}
         client = recorded_model(
             CallableModelClient(respond),
-            "root",
+            "main",
             PRICING,
             allowance,
             trial,
@@ -185,7 +185,7 @@ def test_transport_failure_and_cancellation_retain_unknown_cost(tmp_path, cancel
 
         allowance, trial = Allowance(1), {"model_calls": []}
         client = recorded_model(
-            CallableModelClient(respond), "sidecar", PRICING, allowance, trial, tmp_path
+            CallableModelClient(respond), "reader", PRICING, allowance, trial, tmp_path
         )
         with pytest.raises(asyncio.CancelledError if cancel else RuntimeError):
             await client.complete(REQUEST)
@@ -212,7 +212,7 @@ def test_completed_response_with_unknown_usage_keeps_full_reservation(tmp_path):
 
         allowance, trial = Allowance(1, max_unknown_calls=1), {"model_calls": []}
         client = recorded_model(
-            CallableModelClient(respond), "root", PRICING, allowance, trial, tmp_path
+            CallableModelClient(respond), "main", PRICING, allowance, trial, tmp_path
         )
         response = await client.complete(REQUEST)
         assert response.text == "answer"
@@ -242,7 +242,7 @@ def test_denied_request_never_reaches_adapter(tmp_path):
 
         allowance, trial = Allowance(0.000001), {"model_calls": []}
         client = recorded_model(
-            CallableModelClient(respond), "root", PRICING, allowance, trial, tmp_path
+            CallableModelClient(respond), "main", PRICING, allowance, trial, tmp_path
         )
         with pytest.raises(BudgetExceeded):
             await client.complete(REQUEST)
@@ -385,7 +385,7 @@ def test_cancellation_while_pacing_is_durable_and_has_no_unknown_charge(tmp_path
         await pacer(1000)
         allowance, trial = Allowance(1), {"model_calls": []}
         client = recorded_model(
-            CallableModelClient(respond), "root", PRICING, allowance, trial, tmp_path, pacing=pacer
+            CallableModelClient(respond), "main", PRICING, allowance, trial, tmp_path, pacing=pacer
         )
         task = asyncio.create_task(client.complete(REQUEST))
         await sleeping.wait()
@@ -409,7 +409,7 @@ def test_cancellation_while_pacing_is_durable_and_has_no_unknown_charge(tmp_path
 
 
 def test_recorded_roles_share_pacing_and_retain_actual_waits(tmp_path):
-    """Maintenance, sidecar and root requests use the same token admission window."""
+    """Graph, reader and main requests use the same token admission window."""
     pytest.importorskip("tiktoken")
 
     async def scenario():
@@ -432,7 +432,7 @@ def test_recorded_roles_share_pacing_and_retain_actual_waits(tmp_path):
 
         pacer = make_token_pacer(pacing_reservation(REQUEST) * 2, clock=lambda: now[0], sleep=sleep)
         allowance, trial = Allowance(1), {"model_calls": []}
-        for role in ("maintenance", "sidecar", "root"):
+        for role in ("graph", "reader", "main"):
             client = recorded_model(
                 CallableModelClient(respond),
                 role,
@@ -470,7 +470,7 @@ def test_paced_request_rechecks_dollar_stop_before_dispatch(tmp_path):
             pytest.fail("Stopped allowance reached provider")
 
         client = recorded_model(
-            CallableModelClient(respond), "root", PRICING, allowance, trial, tmp_path, pacing=pacing
+            CallableModelClient(respond), "main", PRICING, allowance, trial, tmp_path, pacing=pacing
         )
         with pytest.raises(BudgetExceeded, match="unknown_usage_call_limit"):
             await client.complete(REQUEST)
@@ -507,7 +507,7 @@ def test_dispatched_failure_keeps_token_window_and_unknown_dollar_reservation(tm
         pacer = make_token_pacer(pacing_reservation(REQUEST), clock=lambda: now[0], sleep=sleep)
         allowance, trial = Allowance(1), {"model_calls": []}
         client = recorded_model(
-            CallableModelClient(respond), "root", PRICING, allowance, trial, tmp_path, pacing=pacer
+            CallableModelClient(respond), "main", PRICING, allowance, trial, tmp_path, pacing=pacer
         )
         with pytest.raises(RuntimeError):
             await client.complete(REQUEST)

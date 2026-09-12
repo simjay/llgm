@@ -1,11 +1,11 @@
-"""Primary-edge proposal policy, results, and bounded maintenance model calls."""
+"""Primary-edge proposal policy, results, and bounded graph model calls."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field, replace
-from typing import Any, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 from llgm.core.errors import BudgetExceeded, ConfigurationError
 from llgm.core.types import Edge
@@ -18,13 +18,12 @@ from llgm.models.base import ModelClient, ModelRequest, ModelResponse, Usage
 class MaintenancePolicy:
     """Declared limits and acceptance rules for one graph-maintenance operation.
 
-    ``validated`` publishes structurally supported allowlisted relations.
+    ``validated`` publishes structurally supported generic connections.
     ``propose`` returns candidates for caller review. ``disabled`` makes no model
     or search calls. Original sources remain committed if maintenance fails.
     """
 
     mode: str = "validated"
-    allowed_relations: tuple[str, ...] = ("related_to",)
     max_nodes: int = 8
     max_candidates: int = 8
     max_links_per_node: int = 4
@@ -32,7 +31,7 @@ class MaintenancePolicy:
     budget: Budget = field(
         default_factory=lambda: Budget(
             max_model_calls=8,
-            max_sidecar_calls=8,
+            max_reader_calls=8,
             max_searches=8,
             max_context_tokens=65536,
             max_output_tokens=2048,
@@ -41,25 +40,13 @@ class MaintenancePolicy:
     )
 
     def __post_init__(self) -> None:
-        """Reject undefined policy modes, relations, and nonpositive work limits."""
+        """Reject undefined policy modes and nonpositive work limits."""
         if self.mode not in {"validated", "propose", "disabled"}:
             raise ConfigurationError("Maintenance mode must be validated, propose, or disabled")
         for name in ("max_nodes", "max_candidates", "max_links_per_node", "max_context_chars"):
             value = getattr(self, name)
             if type(value) is not int or value < 1:
                 raise ConfigurationError(f"{name} must be a positive integer")
-        if (
-            isinstance(self.allowed_relations, str)
-            or not self.allowed_relations
-            or any(
-                not isinstance(relation, str) or not relation.strip()
-                for relation in self.allowed_relations
-            )
-        ):
-            raise ConfigurationError("allowed_relations must contain nonempty relation names")
-        object.__setattr__(self, "allowed_relations", tuple(dict.fromkeys(self.allowed_relations)))
-        if self.allowed_relations != ("related_to",):
-            raise ConfigurationError("Automatic connections use related_to only")
         if not isinstance(self.budget, Budget):
             raise ConfigurationError("Maintenance budget must be a Budget")
 
@@ -78,15 +65,14 @@ class MaintenanceResult:
     error_type: str | None = None
 
 
-class _MaintenanceClient:
+class _GraphClient:
     """Route proposal generation through the shared maintenance admission ledger."""
 
-    def __init__(self, model: ModelClient, ledger: RunLedger, allowed_relations: Sequence[str]):
+    def __init__(self, model: ModelClient, ledger: RunLedger):
         """Bind an existing client without taking ownership of its connection."""
         self.model, self.ledger = model, ledger
         self.capabilities = model.capabilities
         self._exposed: set[str] = set()
-        self.allowed_relations = tuple(allowed_relations)
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         """Admit unique presented evidence before a counted proposal call.
@@ -107,16 +93,9 @@ class _MaintenanceClient:
             raise BudgetExceeded("Maintenance evidence exposure allowance exhausted")
         before_calls = self.ledger.calls
         messages = list(request.messages)
-        messages[0] = replace(
-            messages[0],
-            content=messages[0].content
-            + "\nThe publication policy permits only these relation names: "
-            + json.dumps(self.allowed_relations)
-            + ". Use one of these names only when supported; otherwise omit the link.",
-        )
         try:
             text = await self.ledger.call(
-                self.model, messages, role="maintenance", output_schema=request.output_schema
+                self.model, messages, role="graph", output_schema=request.output_schema
             )
         finally:
             # Rejected admission transfers nothing. An attempted request may

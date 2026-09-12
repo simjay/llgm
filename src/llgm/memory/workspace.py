@@ -42,7 +42,7 @@ from llgm.storage import BlobStore, LocalBlobStore, S3BlobStore
 from llgm.storage._sqlite import enable_wal
 
 T = TypeVar("T")
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 
 def _create_conversation_tables(connection: sqlite3.Connection) -> None:
@@ -125,7 +125,6 @@ def edge_to_dict(edge: Edge) -> dict[str, Any]:
         "edge_id": edge.edge_id,
         "source_node_id": edge.source_node_id,
         "target_node_id": edge.target_node_id,
-        "relation": edge.relation,
         "provenance": _provenance_dict(edge.provenance),
         "recorded_at_ms": edge.recorded_at_ms,
         "applicability": edge.applicability,
@@ -150,12 +149,12 @@ def _edge_from_dict(value: dict[str, Any]) -> Edge:
 
 
 def _create_edge_tables(connection: sqlite3.Connection) -> None:
-    """Create only schema-3 additions, within an existing publication transaction."""
+    """Create primary-edge tables, within an existing publication transaction."""
     statements = (
         "CREATE TABLE edges(edge_id TEXT PRIMARY KEY, source_node_id TEXT NOT NULL REFERENCES sources(node_id), "
-        "target_node_id TEXT NOT NULL REFERENCES sources(node_id), relation TEXT NOT NULL, identity TEXT NOT NULL, "
+        "target_node_id TEXT NOT NULL REFERENCES sources(node_id), identity TEXT NOT NULL, "
         "withdrawn_at_ms INTEGER, payload TEXT NOT NULL)",
-        "CREATE INDEX edges_outgoing ON edges(source_node_id,relation)",
+        "CREATE INDEX edges_outgoing ON edges(source_node_id)",
         "CREATE UNIQUE INDEX edges_active_identity ON edges(identity) WHERE withdrawn_at_ms IS NULL",
         "CREATE TABLE _journal_operational(entry_id TEXT PRIMARY KEY REFERENCES journal_entries(entry_id))",
         "CREATE TABLE _journal_classification(entry_id TEXT PRIMARY KEY REFERENCES journal_entries(entry_id), "
@@ -367,7 +366,7 @@ class Workspace:
                         operation TEXT NOT NULL, key TEXT NOT NULL, fingerprint TEXT NOT NULL, result TEXT NOT NULL,
                         PRIMARY KEY(operation, key)
                     );
-                    PRAGMA user_version = 4;
+                    PRAGMA user_version = 5;
                 """
                 # executescript would implicitly end our transaction first.
                 for statement in schema.split(";"):
@@ -602,14 +601,13 @@ class Workspace:
         source_node_id: str,
         target_node_id: str,
         *,
-        relation: str,
         provenance: Provenance,
         applicability: Mapping[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> Edge:
         """Publish a directed edge independently of journals, deduplicating active relationships.
 
-        Source, target, relation and applicability define duplicate identity. The
+        Source, target and applicability define duplicate identity. The
         first publication retains its provenance. A withdrawn edge is never
         reactivated. A later publication can create a new relationship ID.
         """
@@ -620,7 +618,6 @@ class Workspace:
             uuid.uuid4().hex,
             source_node_id,
             target_node_id,
-            relation,
             provenance,
             time.time_ns() // 1_000_000,
             normalize_applicability(applicability),
@@ -630,10 +627,7 @@ class Workspace:
         request.pop("recorded_at_ms")
         fingerprint = hashlib.sha256(_json(request).encode()).hexdigest()
         identity = _json(
-            {
-                key: request[key]
-                for key in ("source_node_id", "target_node_id", "relation", "applicability")
-            }
+            {key: request[key] for key in ("source_node_id", "target_node_id", "applicability")}
         )
         # Decode the captured representation so caller-owned mappings cannot
         # mutate provenance or applicability while publication waits for a lock.
@@ -662,12 +656,11 @@ class Workspace:
                 result = json.loads(prior[0]) if prior is not None else edge_to_dict(candidate)
                 if prior is None:
                     connection.execute(
-                        "INSERT INTO edges VALUES (?,?,?,?,?,?,?)",
+                        "INSERT INTO edges VALUES (?,?,?,?,?,?)",
                         (
                             candidate.edge_id,
                             source_node_id,
                             target_node_id,
-                            relation,
                             identity,
                             None,
                             _json(result),
@@ -695,7 +688,6 @@ class Workspace:
     async def edges(
         self,
         node_id: str,
-        relation: str | None = None,
         *,
         include_withdrawn: bool = False,
     ) -> list[Edge]:
@@ -714,9 +706,6 @@ class Workspace:
                 raise ReferenceResolutionError(f"Source {node_id!r} does not exist")
             query = "SELECT payload FROM edges WHERE source_node_id=?"
             parameters = [node_id]
-            if relation is not None:
-                query += " AND relation=?"
-                parameters.append(relation)
             if not include_withdrawn:
                 query += " AND withdrawn_at_ms IS NULL"
             return [
@@ -1120,10 +1109,10 @@ class Workspace:
     async def operational_journal(
         self, node_id: str, *, max_bytes: int = 65536
     ) -> list[JournalEntry]:
-        """Load the complete compact sidecar or fail before silently omitting any required record."""
+        """Load the complete compact journal or fail before silently omitting any required record."""
 
         def operation() -> list[JournalEntry]:
-            """Capture the size check and complete sidecar under one local SQLite read transaction."""
+            """Capture the size check and complete journal under one local SQLite read transaction."""
             with self._transaction(write=False):
                 rows = self._operational_rows(node_id, max_bytes)
                 return [_journal_from_dict(json.loads(row)) for row in rows]

@@ -1,7 +1,8 @@
 """Hosted persistent-memory example that makes configured model API calls.
 
 Requires Docker and its configured local Python image.
-Configure LLGM_ROOT_MODEL, LLGM_SIDECAR_MODEL, provider credentials, and optionally
+Configure LLGM_MAIN_MODEL, LLGM_READER_MODEL, LLGM_GRAPH_MODEL,
+provider credentials, and optionally
 LLGM_WORKSPACE_PATH before running, or supply an explicit --env-file path.
 LLGM opens and closes its workspace and provider connections.
 """
@@ -15,46 +16,24 @@ from llgm.core.types import reference_to_dict
 
 
 async def main():
-    """Store two related notes and ask which region runs the production release."""
+    """Continue one topic and let LLGM retain the conversation automatically."""
     async with LLGM.from_settings() as memory:
-        for source_label, text in (
-            (
-                "orion-release",
-                "Orion production runs release r17. Its deployment region is recorded in the Orion registry.",
-            ),
-            (
-                "orion-registry",
-                "The Orion registry places production release r17 in eu-west-1. Staging runs in us-east-1.",
-            ),
-        ):
-            outcome = await memory.ingest(
-                text,
-                idempotency_key="example:notes:" + source_label,
-            )
-            print(
-                json.dumps(
-                    {
-                        "source_id": outcome.source.node_id,
-                        "maintenance_status": outcome.maintenance.status,
-                        "accepted_edges": len(outcome.maintenance.accepted),
-                        "maintenance_usage": dict(outcome.maintenance.usage),
-                    },
-                    indent=2,
-                )
-            )
-            if outcome.maintenance.status not in {"completed", "disabled"}:
-                raise RuntimeError(
-                    "Source is persisted, but maintenance needs inspection before continuing"
-                )
+        await memory.answer(
+            "Orion production runs release r17 in eu-west-1. Staging runs in us-east-1.",
+            conversation_id="orion",
+        )
         answer = await memory.answer(
-            "Which region runs Orion production?", scope={"env": "production"}
+            "Which region runs production?",
+            conversation_id="orion",
         )
         print(answer.answer)
         print(
             json.dumps(
                 {
+                    "conversation_id": answer.conversation_id,
+                    "node_id": answer.node_id,
                     "status": answer.status,
-                    "references": [reference_to_dict(reference) for reference in answer.references],
+                    "references": [reference_to_dict(ref) for ref in answer.references],
                     "usage": answer.usage,
                 },
                 indent=2,

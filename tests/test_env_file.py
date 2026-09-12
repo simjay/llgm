@@ -17,8 +17,8 @@ def test_env_file_accepts_assignments_quotes_and_comments(tmp_path):
     path.write_text(
         "# Local synthetic configuration\n"
         "\n"
-        "export LLGM_ROOT_MODEL = root-fixture  # selected model\n"
-        "LLGM_SIDECAR_MODEL='sidecar fixture' # inline comment\n"
+        "export LLGM_MAIN_MODEL = main-fixture  # selected model\n"
+        "LLGM_READER_MODEL='reader fixture' # inline comment\n"
         'QUOTED="spaces and # literal hash"\n'
         "HASH=token#suffix\n"
         "LEADING_HASH=#literal\n"
@@ -33,8 +33,8 @@ def test_env_file_accepts_assignments_quotes_and_comments(tmp_path):
     assert load_env_file(path, environ=environment) is None
 
     assert environment == {
-        "LLGM_ROOT_MODEL": "root-fixture",
-        "LLGM_SIDECAR_MODEL": "sidecar fixture",
+        "LLGM_MAIN_MODEL": "main-fixture",
+        "LLGM_READER_MODEL": "reader fixture",
         "QUOTED": "spaces and # literal hash",
         "HASH": "token#suffix",
         "LEADING_HASH": "#literal",
@@ -76,19 +76,19 @@ def test_env_file_preserves_existing_values_including_empty_strings(tmp_path):
 def test_env_file_updates_only_the_requested_environment(tmp_path, monkeypatch):
     """A supplied mapping stays isolated while an omitted mapping loads process configuration."""
     path = tmp_path / "local.env"
-    path.write_text("LLGM_ROOT_MODEL=root-fixture\n", encoding="utf-8")
+    path.write_text("LLGM_MAIN_MODEL=main-fixture\n", encoding="utf-8")
     process_environment = {}
     monkeypatch.setattr(os, "environ", process_environment)
     separate_environment = {}
 
     load_env_file(path, environ=separate_environment)
     assert process_environment == {}
-    assert separate_environment == {"LLGM_ROOT_MODEL": "root-fixture"}
+    assert separate_environment == {"LLGM_MAIN_MODEL": "main-fixture"}
 
     load_env_file(path)
     settings = Settings.from_env()
-    assert settings.root_model == "root-fixture"
-    assert settings.field_sources["root_model"] == "environment"
+    assert settings.main_model == "main-fixture"
+    assert settings.field_sources["main_model"] == "environment"
 
 
 @pytest.mark.parametrize(
@@ -138,16 +138,16 @@ def test_unreadable_env_file_raises_configuration_error_without_mutation(tmp_pat
 
 def test_settings_do_not_discover_local_or_parent_dotenv_files(tmp_path, monkeypatch):
     """Settings remain independent of nearby dotenv files unless loading is explicitly requested."""
-    (tmp_path / ".env").write_text("LLGM_ROOT_MODEL=parent-fixture\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("LLGM_MAIN_MODEL=parent-fixture\n", encoding="utf-8")
     child = tmp_path / "child"
     child.mkdir()
-    (child / ".env").write_text("LLGM_ROOT_MODEL=child-fixture\n", encoding="utf-8")
+    (child / ".env").write_text("LLGM_MAIN_MODEL=child-fixture\n", encoding="utf-8")
     monkeypatch.chdir(child)
     monkeypatch.setattr(os, "environ", {})
 
     settings = Settings.from_env()
 
-    assert settings.root_model is None
+    assert settings.main_model is None
     assert os.environ == {}
 
 
@@ -166,9 +166,9 @@ def test_env_file_credentials_reach_sdk_construction_without_entering_settings(
     path = tmp_path / "provider.env"
     path.write_text(
         f"{credential_name}=synthetic-private-value\n"
-        "LLGM_ROOT_MODEL=root-fixture\n"
-        f"LLGM_ROOT_PROVIDER={provider}\n"
-        + (f"LLGM_ROOT_API_KEY_ENV={custom_name}\n" if custom_name else ""),
+        "LLGM_MAIN_MODEL=main-fixture\n"
+        f"LLGM_MAIN_PROVIDER={provider}\n"
+        + (f"LLGM_MAIN_API_KEY_ENV={custom_name}\n" if custom_name else ""),
         encoding="utf-8",
     )
     monkeypatch.setattr(os, "environ", {})
@@ -183,9 +183,9 @@ def test_env_file_credentials_reach_sdk_construction_without_entering_settings(
     load_env_file(path)
     settings = Settings.from_env()
     client = create_model(
-        settings.root_provider,
-        settings.root_model,
-        api_key_env=settings.root_api_key_env,
+        settings.main_provider,
+        settings.main_model,
+        api_key_env=settings.main_api_key_env,
     )
 
     assert received == ["synthetic-private-value"]

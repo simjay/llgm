@@ -240,9 +240,7 @@ class EffectiveReadTests(unittest.IsolatedAsyncioTestCase):
     async def test_primary_neighbors_ignore_journal_pointers_and_patch_scope(self):
         """Primary connectivity works with empty journals and survives unrelated amendments."""
         a, b, c = [await self.source(name, name) for name in "abc"]
-        await self.workspace.publish_edge(
-            "a", "b", relation="related_to", provenance=Provenance("user", "test")
-        )
+        await self.workspace.publish_edge("a", "b", provenance=Provenance("user", "test"))
         self.assertEqual(await self.workspace.inspect_journal("a"), [])
         self.assertEqual(await self.query.neighbors("a"), [NodeRef("b")])
         await self.amend(a, c)
@@ -250,7 +248,7 @@ class EffectiveReadTests(unittest.IsolatedAsyncioTestCase):
         descriptions = await self.query.edge_descriptions("a")
         self.assertEqual(len(descriptions), 1)
         self.assertEqual(descriptions[0]["reference"], {"type": "node", "node_id": "b"})
-        self.assertEqual(descriptions[0]["relation"], "related_to")
+        self.assertNotIn("relation", descriptions[0])
         self.assertEqual((await self.query.read_segments(a))[0].reference, c)
 
     async def test_edge_applicability_filters_primary_relationship(self):
@@ -260,7 +258,6 @@ class EffectiveReadTests(unittest.IsolatedAsyncioTestCase):
         edge = await self.workspace.publish_edge(
             "a",
             "b",
-            relation="related_to",
             provenance=Provenance("user", "test"),
             applicability={"scope": {"env": "prod"}, "valid_from_ms": 100, "valid_until_ms": 200},
         )
@@ -285,24 +282,22 @@ class EffectiveReadTests(unittest.IsolatedAsyncioTestCase):
                     side_effect=AssertionError("Edge descriptions must not read source text"),
                 ):
                     self.assertEqual(await query.edge_descriptions("a"), raw if active else [])
-                self.assertEqual(await query.edge_descriptions("a", "different_relation"), [])
 
     async def test_edge_descriptions_keep_applicable_relations_separate_and_hide_withdrawals(self):
         """One target can have several applicable edges while unresolved scope and withdrawal stay excluded."""
         for node in "ab":
             await self.source(node, node)
         edges = []
-        for relation, applicability in (
-            ("credential", {}),
-            ("supported_by", {"scope": {"env": "prod"}}),
-            ("incident_contact", {"scope": {"env": "stage"}}),
-            ("conditional", {"unrecognized_rule": "unknown"}),
+        for applicability in (
+            {},
+            {"scope": {"env": "prod"}},
+            {"scope": {"env": "stage"}},
+            {"unrecognized_rule": "unknown"},
         ):
             edges.append(
                 await self.workspace.publish_edge(
                     "a",
                     "b",
-                    relation=relation,
                     provenance=Provenance("user", "test", (NodeRef("a"),)),
                     applicability=applicability,
                 )
@@ -312,9 +307,7 @@ class EffectiveReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             {record["edge_id"] for record in descriptions}, {edge.edge_id for edge in edges[:2]}
         )
-        self.assertEqual(
-            {record["relation"] for record in descriptions}, {"credential", "supported_by"}
-        )
+        self.assertTrue(all("relation" not in record for record in descriptions))
         self.assertEqual(await query.neighbors("a"), [NodeRef("b")])
         await self.workspace.withdraw_edge(edges[0].edge_id, provenance=Provenance("user", "test"))
         remaining = await query.edge_descriptions("a")

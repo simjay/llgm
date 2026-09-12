@@ -1,8 +1,10 @@
 # Configuration
 
-Choose a model to read your sources and a model to write the final answer.
-LLGM calls these the **sidecar** and **root** roles. You can use the same model
-for both, or use a smaller model for reading and a stronger one for the answer.
+Configure three model roles. The **graph model** chooses topic placement
+and proposes connections. The **reader model** reads evidence recursively.
+The **main model** writes the final answer. Maintenance can use a small model
+that makes conservative structured decisions, while readers need to generate
+Python reliably. Each role has its own configured client. Model IDs may be shared.
 The [quickstart](quickstart.md) shows the initial setup with local storage.
 
 Once you have set the model IDs and credentials in your environment, open LLGM
@@ -48,8 +50,10 @@ credentials and model IDs. For OpenAI, the minimum is:
 
 ```text
 OPENAI_API_KEY=your-api-key
-LLGM_ROOT_MODEL=your-root-model-id
-LLGM_SIDECAR_MODEL=your-sidecar-model-id
+LLGM_MAIN_MODEL=your-main-model-id
+LLGM_READER_MODEL=your-reader-model-id
+LLGM_GRAPH_PROVIDER=openai
+LLGM_GRAPH_MODEL=your-graph-model-id
 ```
 
 Replace the placeholders and keep this file out of version control. You can
@@ -109,26 +113,28 @@ exceptions may propagate. Check both the exit code and result status in scripts.
 
 ## Providers and settings
 
-Configure model IDs explicitly. This example uses OpenAI for the root and
-Anthropic for the sidecar:
+Configure model IDs explicitly. This example uses OpenAI for the main model and
+Anthropic for the reader:
 
 ```text
 LLGM_WORKSPACE_PATH=./memory
-LLGM_ROOT_PROVIDER=openai
-LLGM_ROOT_MODEL=your-root-model-id
-LLGM_SIDECAR_PROVIDER=anthropic
-LLGM_SIDECAR_MODEL=your-sidecar-model-id
+LLGM_MAIN_PROVIDER=openai
+LLGM_MAIN_MODEL=your-main-model-id
+LLGM_READER_PROVIDER=anthropic
+LLGM_READER_MODEL=your-reader-model-id
+LLGM_GRAPH_PROVIDER=openai
+LLGM_GRAPH_MODEL=your-graph-model-id
 ```
 
 Provider names are `openai`, `anthropic`, and `openai_compatible`. Install the
 `openai` extra for OpenAI and compatible endpoints, or `anthropic` for Anthropic.
-The defaults use OpenAI for both roles. The mixed-provider example needs both
+The defaults use OpenAI for all three roles. The mixed-provider example needs both
 extras and both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`.
 
-`LLGM_ROOT_API_KEY_ENV` and
-`LLGM_SIDECAR_API_KEY_ENV` can name alternative credential variables. They contain
-variable names, never credential values. `LLGM_ROOT_BASE_URL` and
-`LLGM_SIDECAR_BASE_URL` select individual endpoints. A compatible endpoint
+`LLGM_MAIN_API_KEY_ENV`, `LLGM_READER_API_KEY_ENV`, and
+`LLGM_GRAPH_API_KEY_ENV` can name alternative credential variables. They contain
+variable names, never credential values. `LLGM_MAIN_BASE_URL`, `LLGM_READER_BASE_URL`, and
+`LLGM_GRAPH_BASE_URL` select individual endpoints. A compatible endpoint
 requires an explicit base URL.
 
 OpenAI uses the Responses API, Anthropic uses the Messages API, and compatible
@@ -147,10 +153,12 @@ A minimal TOML file uses lowercase field names:
 ```toml
 [llgm]
 workspace_path = "./memory"
-root_provider = "openai"
-root_model = "your-root-model-id"
-sidecar_provider = "openai"
-sidecar_model = "your-sidecar-model-id"
+main_provider = "openai"
+main_model = "your-main-model-id"
+reader_provider = "openai"
+reader_model = "your-reader-model-id"
+graph_provider = "openai"
+graph_model = "your-graph-model-id"
 max_model_calls = 12
 ```
 
@@ -234,16 +242,19 @@ and operational failures remain visible as unresolved outcomes.
 The complete operational journal is limited by `LLGM_MAX_JOURNAL_BYTES` per node.
 `QueryEvidence` also limits its cached journals to 4 MiB of serialized data by
 default. Irreducible overflow raises a budget error. Full historical storage can
-continue growing. The current source-blob adapter loads each owning JSON source
-on the host, even when the model requests only metadata or a small span.
+continue growing. Appended conversation turns are stored in separate immutable
+blobs. Metadata paging reads their coordinates, and a span read loads its owning
+turn. Explicit imports and legacy base sources still load their complete source blob.
 
 ## Application and maintenance limits
 
 `LLGM.from_settings()` owns its configured workspace and clients. Its `Budget`
 uses the inference limits in settings. Pass constructor options such as
 `max_depth`, `max_steps`, and `max_operations` to control recursion. Maintenance
-uses the sidecar client by default and has its own `MaintenancePolicy.budget`.
-A directly constructed application can use a separate maintenance client.
+uses the separately configured graph client. Topic routing in `answer()`
+shares its answer budget. Catch-up routing and connection proposals use
+`MaintenancePolicy.budget`. Usage and trace events distinguish maintenance
+calls from reader calls.
 
 These controls are Python constructor options, rather than `LLGM_` environment
 variables. They also work as keyword arguments to `LLGM.from_settings()`:
@@ -270,7 +281,7 @@ async def ask_with_limits(settings, question):
     policy = MaintenancePolicy(
         mode="propose",
         max_candidates=4,
-        budget=Budget(max_model_calls=4, max_sidecar_calls=4),
+        budget=Budget(max_model_calls=4, max_graph_calls=4),
     )
     async with LLGM.from_settings(
         settings, maintenance_policy=policy, max_depth=2,
@@ -280,12 +291,14 @@ async def ask_with_limits(settings, question):
 
 Maintenance settings apply when ingesting or organizing sources. They do not
 change the inference budget. LLGM normally retrieves seeds before node inference.
-An explicit `answer(..., node_id=...)` bypasses retrieval and supplies one seed.
+An explicit `answer(..., node_id=..., remember=False)` bypasses retrieval
+and supplies one seed.
 
 The default maintenance mode is `validated`, which checks proposed relationships
 and publishes accepted links. `propose` returns proposals for review, and
 `disabled` skips maintenance. Original sources remain stored if maintenance
-fails. To skip it for one ingestion, pass `organize=False` to `ingest()`.
+fails. To skip connection proposals for one ingestion, pass `organize=False`
+to `ingest()`. Topic routing still runs.
 
 ### Change limits for one answer
 
@@ -342,7 +355,7 @@ See [node search](node-search.md) for backend choices and passage references.
 
 `LLGM.from_settings()` closes the workspace and model clients it creates.
 Construct `LLGM` directly to supply custom clients, configure provider-specific
-options, or use a third model for maintenance. You then own those resources.
+options, or inject a graph model. You then own those resources.
 
 Register cleanup as each resource is acquired so it also runs if a later step
 fails:
@@ -354,15 +367,17 @@ from llgm import LLGM, Workspace
 from llgm.models import create_model
 
 
-async def ask_with_clients(root_model_id, sidecar_model_id, question):
+async def ask_with_clients(main_model_id, reader_model_id, graph_model_id, question):
     """Use separate providers and close their clients after the answer."""
     async with AsyncExitStack() as stack:
-        root = create_model("openai", root_model_id)
-        stack.push_async_callback(root.aclose)
-        sidecar = create_model("anthropic", sidecar_model_id)
-        stack.push_async_callback(sidecar.aclose)
+        main = create_model("openai", main_model_id)
+        stack.push_async_callback(main.aclose)
+        reader = create_model("anthropic", reader_model_id)
+        stack.push_async_callback(reader.aclose)
         workspace = await stack.enter_async_context(Workspace.open("./memory"))
-        memory = LLGM(workspace, root, sidecar)
+        graph = create_model("openai", graph_model_id)
+        stack.push_async_callback(graph.aclose)
+        memory = LLGM(workspace, main, reader, graph_model=graph)
         return await memory.answer(question)
 ```
 
@@ -371,6 +386,20 @@ image. When constructing a native adapter around an existing SDK client, the
 adapter borrows it. Closing that adapter does not close the supplied SDK client.
 
 ## Storage choices
+
+This version uses workspace metadata schema 5. Schema 4 workspaces must be
+rebuilt from their original inputs. They are rejected without changing their data. To copy an existing local
+schema-3 workspace into a new directory while preserving original evidence:
+
+```sh
+llgm migrate ./old-memory ./new-memory
+```
+
+The source stays unchanged. Point `LLGM_WORKSPACE_PATH` at the new directory.
+Schema-2 migration also requires `--journal-roles` with explicit pointer
+classifications. No automatic in-place migration runs when a workspace opens.
+
+
 
 The default workspace stores source blobs locally and metadata in SQLite.
 `LLGM_WORKSPACE_PATH` defaults to `./memory`. Unless overridden, blob files go in
@@ -394,7 +423,7 @@ blob cleanup, and index compaction are not implemented.
 
 ### Existing databases
 
-The current workspace metadata format is schema 3, with independent primary
+The current workspace metadata format is schema 5, with independent primary
 edges and a compact operational journal. Schema-2 source blobs and journal record
 identities remain valid within it. Opening an older workspace does not silently
 change its graph meaning. Schema-1 versioned-source workspaces remain unsupported.
@@ -437,12 +466,13 @@ An answer may observe records added while it runs.
 ## Runtime limits and usage
 
 All branches and recursive children share one answer budget. These settings
-control the main limits:
+control the answer limits:
 
 | Environment variable | Default | Limits |
 | --- | --- | --- |
 | `LLGM_MAX_MODEL_CALLS` | 40 | Total model calls, including final synthesis |
-| `LLGM_MAX_SIDECAR_CALLS` | 36 | Calls used to investigate evidence |
+| `LLGM_MAX_READER_CALLS` | 36 | Calls used to investigate evidence |
+| `LLGM_MAX_GRAPH_CALLS` | 8 | Topic routing calls within an answer |
 | `LLGM_MAX_SEARCHES` | 8 | Retrieval calls |
 | `LLGM_MAX_EVIDENCE_TOKENS` | 65536 | Evidence exposed during the answer |
 | `LLGM_MAX_BUNDLE_TOKENS` | 8000 | Selected evidence returned for synthesis |
@@ -451,7 +481,7 @@ control the main limits:
 | `LLGM_TIMEOUT_SECONDS` | 120 | Deadline for preparation and inference |
 
 Use constructor options for depth, steps and operations, as shown above.
-Maintenance has a separate budget. Ordinary `LLGM` answers have no spending cap
+Connection proposals have a separate budget. Ordinary `LLGM` answers have no spending cap
 in dollars.
 
 Cleanup still runs after a deadline or cancellation. Releasing an interpreter

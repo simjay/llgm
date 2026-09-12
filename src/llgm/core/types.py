@@ -207,7 +207,6 @@ class Edge:
     edge_id: str
     source_node_id: str
     target_node_id: str
-    relation: str
     provenance: Provenance
     recorded_at_ms: int
     applicability: Mapping[str, Any] | None = None
@@ -216,7 +215,7 @@ class Edge:
 
     def __post_init__(self) -> None:
         """Validate independent edge identity, endpoints, and auditable lifecycle fields."""
-        for name in ("edge_id", "source_node_id", "target_node_id", "relation"):
+        for name in ("edge_id", "source_node_id", "target_node_id"):
             _nonempty(getattr(self, name), name)
         if self.source_node_id == self.target_node_id:
             raise SchemaError("Edge endpoints must differ")

@@ -6,8 +6,8 @@ import json
 import pytest
 
 from llgm import Budget, SourceSpan
-from llgm.core.errors import ConfigurationError, ProviderError, SchemaError
-from llgm.inference.iterative import EvidenceSidecar, IterativeRuntime
+from llgm.core.errors import BudgetExceeded, ConfigurationError, ProviderError, SchemaError
+from llgm.inference.iterative import EvidenceReader, IterativeRuntime
 from llgm.models import CallableModelClient, ModelResponse, ScriptedModelClient, Usage
 from llgm.retrieval import SearchHit, SearchPassage
 
@@ -36,7 +36,7 @@ class Retriever:
 
 
 def composition(ids, text="Atlas uses PostgreSQL."):
-    """Encode a sidecar evidence bundle with explicit passage citations."""
+    """Encode a reader evidence bundle with explicit passage citations."""
     return json.dumps({"text": text, "passage_ids": ids, "unresolved": []})
 
 
@@ -44,13 +44,13 @@ def test_single_policy_answers_with_verified_references_and_unknown_usage():
     """Single-pass answers retain verified references and distinguish unknown token usage."""
 
     async def run():
-        """Compose one retrieved passage before the root supplies the final answer."""
+        """Compose one retrieved passage before the main supplies the final answer."""
         retriever = Retriever([[hit("a")]])
-        sidecar = EvidenceSidecar(
+        reader = EvidenceReader(
             model=ScriptedModelClient([composition(["a"])]), retriever=retriever, policy="single"
         )
-        root = ScriptedModelClient([ModelResponse("PostgreSQL.", Usage(10, 3))])
-        result = await IterativeRuntime(root=root, sidecar=sidecar).answer("Atlas database?")
+        main = ScriptedModelClient([ModelResponse("PostgreSQL.", Usage(10, 3))])
+        result = await IterativeRuntime(main_model=main, reader=reader).answer("Atlas database?")
         assert result.answer == "PostgreSQL."
         assert result.references[0].node_id == "a"
         assert result.usage["model_calls"] == 2
@@ -78,8 +78,8 @@ def test_adaptive_followup_depends_on_first_evidence_and_deduplicates():
         )
         original = hit("a", "Original choice: SQLite.")
         retriever = Retriever([[original], [original, hit("b")]])
-        sidecar = EvidenceSidecar(model=model, retriever=retriever, policy="adaptive")
-        result = await sidecar.gather("Atlas database?")
+        reader = EvidenceReader(model=model, retriever=retriever, policy="adaptive")
+        result = await reader.gather("Atlas database?")
         assert len(result.hits) == 2
         assert retriever.calls == [("Atlas database?", 10), ("Atlas production update", 10)]
         assert "SQLite" in model.requests[0].messages[1].content
@@ -95,7 +95,7 @@ def test_upfront_generation_sees_no_results_and_queries_use_same_hit_ceiling():
         """Generate three follow-ups before executing the four bounded searches."""
         model = ScriptedModelClient(['{"queries":["q2","q3","q4"]}', composition(["a"])])
         retriever = Retriever([[hit("a")], [], [], []])
-        result = await EvidenceSidecar(model=model, retriever=retriever, policy="upfront").gather(
+        result = await EvidenceReader(model=model, retriever=retriever, policy="upfront").gather(
             "q1"
         )
         assert model.requests[0].messages[1].content == "q1"
@@ -105,41 +105,41 @@ def test_upfront_generation_sees_no_results_and_queries_use_same_hit_ceiling():
     asyncio.run(run())
 
 
-def test_root_call_reserved_when_sidecar_runs_out_of_allowance():
-    """A depleted sidecar allowance still reserves the root's final response."""
+def test_main_call_reserved_when_reader_runs_out_of_allowance():
+    """A depleted reader allowance still reserves the main's final response."""
 
     async def run():
-        """Use a one-call budget to expose evidence without invoking the sidecar model."""
-        sidecar_model = ScriptedModelClient([])
-        sidecar = EvidenceSidecar(
-            model=sidecar_model, retriever=Retriever([[hit("a")]]), policy="single"
+        """Use a one-call budget to expose evidence without invoking the reader model."""
+        reader_model = ScriptedModelClient([])
+        reader = EvidenceReader(
+            model=reader_model, retriever=Retriever([[hit("a")]]), policy="single"
         )
-        root = ScriptedModelClient(["PostgreSQL."])
-        result = await IterativeRuntime(root=root, sidecar=sidecar).answer(
+        main = ScriptedModelClient(["PostgreSQL."])
+        result = await IterativeRuntime(main_model=main, reader=reader).answer(
             "database?", Budget(max_model_calls=1)
         )
         assert result.status == "partial"
         assert result.usage["model_calls"] == 1
-        assert len(sidecar_model.requests) == 0
+        assert len(reader_model.requests) == 0
         assert result.evidence.stop_reason == "budget_exhausted"
         assert result.references
 
     asyncio.run(run())
 
 
-def test_unseen_citation_rejected_before_root_answer():
-    """An unseen sidecar citation returns an explicit failure before root inference."""
+def test_unseen_citation_rejected_before_main_answer():
+    """An unseen reader citation returns an explicit failure before main inference."""
 
     async def run():
         """Retain admitted raw evidence and attempted work after an invented citation."""
-        sidecar = EvidenceSidecar(
+        reader = EvidenceReader(
             model=ScriptedModelClient([composition(["invented"])]),
             retriever=Retriever([[hit("a")]]),
             policy="single",
         )
-        root = ScriptedModelClient(["must not be called"])
-        result = await IterativeRuntime(root=root, sidecar=sidecar).answer("database?")
-        assert not root.requests
+        main = ScriptedModelClient(["must not be called"])
+        result = await IterativeRuntime(main_model=main, reader=reader).answer("database?")
+        assert not main.requests
         assert result.status == "failed" and result.answer == ""
         assert result.usage["model_calls"] == 1
         assert result.trace[-1]["error_type"] == "SchemaError"
@@ -155,7 +155,7 @@ def test_overlarge_passage_never_exposed_to_reader():
     async def run():
         """Reject a large hit before any model invocation."""
         model = ScriptedModelClient([])
-        result = await EvidenceSidecar(
+        result = await EvidenceReader(
             model=model, retriever=Retriever([[hit("a", "x" * 1000)]]), policy="single"
         ).gather("q", Budget(max_evidence_tokens=20))
         assert result.stop_reason == "no_evidence"
@@ -173,9 +173,9 @@ def test_deadline_counts_attempt_and_stops_model():
         return ModelResponse("unreachable")
 
     async def run():
-        """Spend a short deadline on one observable sidecar request."""
+        """Spend a short deadline on one observable reader request."""
         model = CallableModelClient(slow)
-        result = await EvidenceSidecar(
+        result = await EvidenceReader(
             model=model, retriever=Retriever([[hit("a")]]), policy="single"
         ).gather("q", Budget(timeout_seconds=0.01))
         assert result.stop_reason == "budget_exhausted"
@@ -190,17 +190,17 @@ def test_query_date_reaches_both_models_without_changing_original_search():
     """The query date reaches both models without rewriting the search question."""
 
     async def run():
-        """Carry one explicit date through evidence composition and root inference."""
+        """Carry one explicit date through evidence composition and main inference."""
         reader = ScriptedModelClient([composition(["a"])])
-        root = ScriptedModelClient(["PostgreSQL."])
+        main = ScriptedModelClient(["PostgreSQL."])
         retriever = Retriever([[hit("a")]])
-        sidecar = EvidenceSidecar(model=reader, retriever=retriever, policy="single")
-        await IterativeRuntime(root=root, sidecar=sidecar).answer(
+        evidence_reader = EvidenceReader(model=reader, retriever=retriever, policy="single")
+        await IterativeRuntime(main_model=main, reader=evidence_reader).answer(
             "database?", question_date="2026-09-09"
         )
         assert retriever.calls == [("database?", 40)]
         assert "2026-09-09" in reader.requests[0].messages[1].content
-        assert "2026-09-09" in root.requests[0].messages[1].content
+        assert "2026-09-09" in main.requests[0].messages[1].content
 
     asyncio.run(run())
 
@@ -213,7 +213,7 @@ def test_upfront_duplicate_queries_fail_without_search_or_hidden_repair():
         model = ScriptedModelClient(['{"queries":["q1","q2","q3"]}'])
         retriever = Retriever([])
         with pytest.raises(SchemaError) as caught:
-            await EvidenceSidecar(model=model, retriever=retriever, policy="upfront").gather("q1")
+            await EvidenceReader(model=model, retriever=retriever, policy="upfront").gather("q1")
         assert not retriever.calls
         assert caught.value.llgm_usage["model_calls"] == 1
 
@@ -230,7 +230,7 @@ def test_duplicate_json_fields_cannot_replace_an_iterative_query_plan():
         )
         retriever = Retriever([])
         with pytest.raises(SchemaError, match="JSON object"):
-            await EvidenceSidecar(model=reader, retriever=retriever, policy="upfront").gather(
+            await EvidenceReader(model=reader, retriever=retriever, policy="upfront").gather(
                 "question"
             )
         assert len(reader.requests) == 1
@@ -265,7 +265,7 @@ def test_cache_usage_categories_survive_the_runtime_ledger():
         response = ModelResponse(
             composition(["a"]), Usage(100, 20, {"cache_read_input_tokens": 80})
         )
-        bundle = await EvidenceSidecar(
+        bundle = await EvidenceReader(
             model=ScriptedModelClient([response]),
             retriever=Retriever([[hit("a")]]),
             policy="single",
@@ -290,8 +290,8 @@ def test_cancellation_retains_the_dispatched_attempt():
             await asyncio.Event().wait()
 
         model = CallableModelClient(waiting)
-        sidecar = EvidenceSidecar(model=model, retriever=Retriever([[hit("a")]]), policy="single")
-        task = asyncio.create_task(sidecar.gather("q"))
+        reader = EvidenceReader(model=model, retriever=Retriever([[hit("a")]]), policy="single")
+        task = asyncio.create_task(reader.gather("q"))
         await entered.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError) as caught:
@@ -365,7 +365,7 @@ def test_current_source_metadata_reaches_the_iterative_reader(tmp_path):
                         composition([p["passage_id"] for p in payload["evidence"]])
                     )
 
-                result = await EvidenceSidecar(
+                result = await EvidenceReader(
                     model=CallableModelClient(compose),
                     retriever=evidence,
                     policy="single",
@@ -387,7 +387,7 @@ def test_metadata_is_charged_before_passage_admission():
     async def scenario():
         """Reject the entire passage before exposing it to the reader."""
         model = ScriptedModelClient([])
-        result = await EvidenceSidecar(
+        result = await EvidenceReader(
             model=model,
             policy="single",
             retriever=Retriever([[hit("a", "Atlas", {"scope": "x" * 1000})]]),
@@ -400,10 +400,10 @@ def test_metadata_is_charged_before_passage_admission():
 
 
 def test_budget_fallback_preserves_the_admitted_metadata_snapshot():
-    """Raw root evidence retains admitted metadata even if a later callback mutates the hit."""
+    """Raw main evidence retains admitted metadata even if a later callback mutates the hit."""
 
     async def scenario():
-        """Spend the sidecar call allowance after observing a source with scoped metadata."""
+        """Spend the reader call allowance after observing a source with scoped metadata."""
         metadata = {"role": "assistant", "date": "2031-05-16", "scope": {"env": "staging"}}
 
         async def followup(request):
@@ -411,16 +411,16 @@ def test_budget_fallback_preserves_the_admitted_metadata_snapshot():
             metadata["scope"]["env"] = "production"
             return ModelResponse('{"query":"Atlas update"}')
 
-        root = ScriptedModelClient(["The staging setting is PostgreSQL; production is unresolved."])
+        main = ScriptedModelClient(["The staging setting is PostgreSQL; production is unresolved."])
         result = await IterativeRuntime(
-            root=root,
-            sidecar=EvidenceSidecar(
+            main_model=main,
+            reader=EvidenceReader(
                 model=CallableModelClient(followup),
                 policy="adaptive",
                 retriever=Retriever([[hit("a", metadata=metadata)], []]),
             ),
         ).answer("Atlas", Budget(max_model_calls=2))
-        supplied = json.loads(root.requests[0].messages[1].content)
+        supplied = json.loads(main.requests[0].messages[1].content)
         record = json.loads(supplied["evidence"])
         assert record["text"] == "Atlas uses PostgreSQL."
         assert record["metadata"] == {
@@ -439,11 +439,11 @@ def test_metadata_cannot_bypass_the_fallback_bundle_allowance():
     """Fallback admission includes applicability metadata when choosing raw excerpts."""
 
     async def scenario():
-        """Admit the source for reading but exclude its oversized raw return to the root."""
-        root = ScriptedModelClient(["Evidence is unavailable within the allowance."])
+        """Admit the source for reading but exclude its oversized raw return to the main."""
+        main = ScriptedModelClient(["Evidence is unavailable within the allowance."])
         result = await IterativeRuntime(
-            root=root,
-            sidecar=EvidenceSidecar(
+            main_model=main,
+            reader=EvidenceReader(
                 model=ScriptedModelClient([]),
                 policy="single",
                 retriever=Retriever([[hit("a", "Atlas", {"scope": "x" * 2000})]]),
@@ -451,7 +451,7 @@ def test_metadata_cannot_bypass_the_fallback_bundle_allowance():
         ).answer("Atlas", Budget(max_model_calls=1, max_bundle_tokens=1000))
         assert len(result.evidence.hits) == 1
         assert not result.references
-        assert json.loads(root.requests[0].messages[1].content)["evidence"] == ""
+        assert json.loads(main.requests[0].messages[1].content)["evidence"] == ""
         assert result.status == "partial"
 
     asyncio.run(scenario())
@@ -459,7 +459,7 @@ def test_metadata_cannot_bypass_the_fallback_bundle_allowance():
 
 @pytest.mark.parametrize("has_evidence", [False, True])
 def test_unresolved_or_missing_evidence_returns_partial_status(has_evidence):
-    """An executed root call does not turn explicit evidence gaps into a completed answer."""
+    """An executed main call does not turn explicit evidence gaps into a completed answer."""
 
     async def scenario():
         """Keep both no-hit and reader-declared gaps visible in the shared answer status."""
@@ -472,8 +472,8 @@ def test_unresolved_or_missing_evidence_returns_partial_status(has_evidence):
         )
         reader = ScriptedModelClient([response] if has_evidence else [])
         result = await IterativeRuntime(
-            root=ScriptedModelClient(["Insufficient production evidence."]),
-            sidecar=EvidenceSidecar(
+            main_model=ScriptedModelClient(["Insufficient production evidence."]),
+            reader=EvidenceReader(
                 model=reader,
                 policy="single",
                 retriever=Retriever([[hit("a")] if has_evidence else []]),
@@ -486,7 +486,7 @@ def test_unresolved_or_missing_evidence_returns_partial_status(has_evidence):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("stage", ["search", "reader", "root"])
+@pytest.mark.parametrize("stage", ["search", "reader", "main"])
 @pytest.mark.parametrize("expected_failure", [False, True])
 def test_answer_failure_boundary_retains_attempts_and_available_evidence(stage, expected_failure):
     """Expected operational failures return results; unexpected errors raise with attempted usage."""
@@ -512,18 +512,18 @@ def test_answer_failure_boundary_retains_attempts_and_available_evidence(stage, 
             if stage == "reader"
             else ScriptedModelClient([composition(["a"])])
         )
-        root = (
-            CallableModelClient(fail) if stage == "root" else ScriptedModelClient(["unreachable"])
+        main = (
+            CallableModelClient(fail) if stage == "main" else ScriptedModelClient(["unreachable"])
         )
         runtime = IterativeRuntime(
-            root=root,
-            sidecar=EvidenceSidecar(
+            main_model=main,
+            reader=EvidenceReader(
                 model=reader,
                 retriever=retriever,
                 policy="single",
             ),
         )
-        expected_calls = {"search": 0, "reader": 1, "root": 2}[stage]
+        expected_calls = {"search": 0, "reader": 1, "main": 2}[stage]
         if expected_failure:
             result = await runtime.answer("Atlas database?")
             assert result.status == "failed" and result.answer == ""
@@ -559,11 +559,11 @@ def test_answer_failure_boundary_retains_attempts_and_available_evidence(stage, 
 def test_answer_rejects_invalid_public_arguments_before_dispatch(options):
     """Invalid questions, dates, and budgets raise before starting a run or retrieval."""
     reader = ScriptedModelClient([])
-    root = ScriptedModelClient([])
+    main = ScriptedModelClient([])
     retriever = Retriever([])
     runtime = IterativeRuntime(
-        root=root,
-        sidecar=EvidenceSidecar(
+        main_model=main,
+        reader=EvidenceReader(
             model=reader,
             retriever=retriever,
             policy="single",
@@ -571,14 +571,14 @@ def test_answer_rejects_invalid_public_arguments_before_dispatch(options):
     )
     with pytest.raises((SchemaError, ConfigurationError)):
         asyncio.run(runtime.answer(**{"question": "Atlas", **options}))
-    assert not reader.requests and not root.requests and not retriever.calls
+    assert not reader.requests and not main.requests and not retriever.calls
 
 
 def test_answer_deadline_retains_admitted_evidence_and_the_timed_out_attempt():
     """An exhausted reader deadline returns a failure result without discarding prior retrieval."""
 
     async def scenario():
-        """Let the reader consume the run deadline before a final root call can start."""
+        """Let the reader consume the run deadline before a final main call can start."""
         cancelled = asyncio.Event()
 
         async def slow(request):
@@ -588,10 +588,10 @@ def test_answer_deadline_retains_admitted_evidence_and_the_timed_out_attempt():
             finally:
                 cancelled.set()
 
-        root = ScriptedModelClient([])
+        main = ScriptedModelClient([])
         result = await IterativeRuntime(
-            root=root,
-            sidecar=EvidenceSidecar(
+            main_model=main,
+            reader=EvidenceReader(
                 model=CallableModelClient(slow),
                 retriever=Retriever([[hit("a")]]),
                 policy="single",
@@ -602,12 +602,12 @@ def test_answer_deadline_retains_admitted_evidence_and_the_timed_out_attempt():
         assert result.usage["model_calls"] == 1 and result.usage["unknown_usage_calls"] == 1
         assert any(event.get("status") == "timeout" for event in result.trace)
         assert result.trace[-1]["error_type"] == "BudgetExceeded"
-        assert cancelled.is_set() and not root.requests
+        assert cancelled.is_set() and not main.requests
 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("stage", ["reader", "root"])
+@pytest.mark.parametrize("stage", ["reader", "main"])
 def test_answer_cancellation_still_raises_and_retains_dispatched_work(stage):
     """Result-based operational failures do not swallow caller cancellation of either model."""
 
@@ -625,11 +625,11 @@ def test_answer_cancellation_still_raises_and_retains_dispatched_work(stage):
             if stage == "reader"
             else ScriptedModelClient([composition(["a"])])
         )
-        root = CallableModelClient(waiting) if stage == "root" else ScriptedModelClient([])
+        main = CallableModelClient(waiting) if stage == "main" else ScriptedModelClient([])
         task = asyncio.create_task(
             IterativeRuntime(
-                root=root,
-                sidecar=EvidenceSidecar(
+                main_model=main,
+                reader=EvidenceReader(
                     model=reader,
                     retriever=Retriever([[hit("a")]]),
                     policy="single",
@@ -642,5 +642,47 @@ def test_answer_cancellation_still_raises_and_retains_dispatched_work(stage):
             await task
         assert caught.value.llgm_usage["model_calls"] == (1 if stage == "reader" else 2)
         assert caught.value.llgm_trace[-1]["status"] == "cancelled"
+
+    asyncio.run(scenario())
+
+
+def test_maintenance_and_reader_allowances_are_independent():
+    """Each helper role has its own cap while both spend the total run allowance."""
+    from llgm.inference.budget import RunLedger
+    from llgm.models import Message
+
+    async def scenario():
+        """Admit one call per role and reject further calls before reaching the client."""
+        ledger = RunLedger(Budget(max_model_calls=3, max_reader_calls=1, max_graph_calls=1), len)
+        model = ScriptedModelClient(["ok", "ok", "ok"])
+        await ledger.call(model, [Message("user", "test")], role="graph")
+        await ledger.call(model, [Message("user", "test")], role="reader")
+        for role in ("graph", "reader"):
+            with pytest.raises(BudgetExceeded):
+                await ledger.call(model, [Message("user", "test")], role=role)
+        await ledger.call(model, [Message("user", "test")], role="main")
+        assert len(model.requests) == 3
+        assert ledger.usage()["graph_calls"] == 1
+        assert ledger.usage()["reader_calls"] == 1
+        with pytest.raises(BudgetExceeded):
+            await ledger.call(model, [Message("user", "test")], role="main")
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("role", ["root", "sidecar", "maintenance", "query", "", None])
+def test_unknown_model_roles_fail_before_spending_budget(role):
+    """Old or misspelled role names cannot bypass per-role admission limits."""
+    from llgm.inference.budget import RunLedger
+    from llgm.models import Message
+
+    async def scenario():
+        """Reject a malformed role before any client dispatch or ledger mutation."""
+        ledger = RunLedger(Budget(), len)
+        client = ScriptedModelClient(["unreachable"])
+        with pytest.raises(ConfigurationError, match="Model role"):
+            await ledger.call(client, [Message("user", "test")], role=role)
+        assert client.requests == []
+        assert ledger.calls == 0 and ledger.events == []
 
     asyncio.run(scenario())

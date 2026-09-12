@@ -15,7 +15,7 @@ using word matches. The index includes source passages and inline journal
 notes, and refreshes as workspace records are published. This default search
 and seed selection make no model calls.
 
-Selection follows four steps:
+Read-only answers follow four steps:
 
 1. Retrieve up to `retrieval_k` passages for the original question.
 2. Walk that ranking and select the first `max_seed_nodes` distinct owners.
@@ -68,7 +68,12 @@ Two other controls affect search:
   eight includes the initial retrieval. Set it through the answer budget or
   `LLGM_MAX_SEARCHES`.
 
-If you already know which node to investigate, pass `node_id` to `answer()`.
+Conversation answers reserve a seed slot for the active topic and supply recent
+turn references along with matching passages. Remaining slots follow the same
+ranking rule. No score threshold is implemented.
+
+If you already know which node to investigate, pass `node_id` and
+`remember=False` to `answer()`.
 That node becomes the sole seed and initial retrieval is skipped. The delegate
 still chooses what to read within it.
 
@@ -128,7 +133,7 @@ edge from the current node. It uses the shared search allowance and accepts
 at most forty hits per call. Searching or inspecting edges does not start
 children automatically. A delegate can also read a discovered reference directly.
 
-The root gets the selected findings and source quotes after investigation.
+The main model gets the selected findings and source quotes after investigation.
 It has one final synthesis call and no further search phase.
 
 ## Diagnose missing evidence
@@ -143,7 +148,7 @@ happened after selection.
 | Useful conversation found but skipped | Seed limit and passage ranking |
 | Node selected, useful turn never read | Delegate's initial and follow-up reads |
 | Fact read but absent from branch findings | Delegate's evidence selection and return limits |
-| Fact returned but used incorrectly | Root's interpretation of scope, dates and quantities |
+| Fact returned but used incorrectly | Main's interpretation of scope, dates and quantities |
 | Answer missing a supporting reference | Final citation selection |
 
 A node skipped because of the seed limit makes the current pipeline's result

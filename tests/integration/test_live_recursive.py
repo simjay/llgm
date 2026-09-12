@@ -85,7 +85,7 @@ def test_recursive_oracle_source_protocol(
     assert initial_refs
     budget = Budget(
         max_model_calls=12,
-        max_sidecar_calls=10,
+        max_reader_calls=10,
         max_searches=2,
         max_evidence_tokens=64000,
         max_bundle_tokens=64000,
@@ -96,7 +96,7 @@ def test_recursive_oracle_source_protocol(
     record.update(
         dataset=longmemeval.manifest,
         case_id=case.case_id,
-        scope="oracle-source recursive protocol sanity; root is instructed to delegate; not retrieval quality or autonomous planning performance",
+        scope="oracle-source recursive protocol sanity; main is instructed to delegate; not retrieval quality or autonomous planning performance",
         budget=asdict(budget),
         models=live_recursive,
     )
@@ -108,8 +108,8 @@ def test_recursive_oracle_source_protocol(
         "require the depth-2 child to read the supplied source nodes directly and finish "
         "with a cited answer, without further delegation. The depth-1 child must then "
         "return the answer supported by its child's evidence. Finally, use that returned "
-        "evidence to finish at the root. Complete both delegation levels; do not substitute "
-        "a direct root answer or stop at depth 1. Original question: " + case.question
+        "evidence to finish at the main. Complete both delegation levels; do not substitute "
+        "a direct main answer or stop at depth 1. Original question: " + case.question
     )
 
     async def scenario():
@@ -126,8 +126,8 @@ def test_recursive_oracle_source_protocol(
                         for role, config in live_recursive.items()
                     }
                     runtime = RecursiveRuntime(
-                        models["root"],
-                        models["sidecar"],
+                        models["main"],
+                        models["reader"],
                         evidence,
                         budget=budget,
                         max_depth=2,
@@ -228,7 +228,7 @@ def test_recursive_oracle_source_protocol(
                     for ref in result.references:
                         assert (await evidence.read(ref)).text
                     calls = [event for event in events if event.get("kind") == "model"]
-                    assert {event["role"] for event in calls} == {"root", "sidecar"}
+                    assert {event["role"] for event in calls} == {"main", "reader"}
                     assert all(
                         event.get("model") == live_recursive[event["role"]]["model"]
                         for event in calls

@@ -183,7 +183,7 @@ class DockerREPLIntegrationTests(unittest.IsolatedAsyncioTestCase):
         from llgm.memory.workspace import Workspace
         from llgm.models import CallableModelClient, ModelResponse
 
-        sessions, root_requests, child_requests = [], [], []
+        sessions, main_requests, child_requests = [], [], []
 
         def factory(context, *, config, node_callback):
             """Record real container identities without replacing execution or callback transport."""
@@ -227,9 +227,9 @@ class DockerREPLIntegrationTests(unittest.IsolatedAsyncioTestCase):
             result = json.loads(observation["stdout"])
             return finish(result["evidence"], result.get("unresolved", []))
 
-        async def root(request):
+        async def main(request):
             """Synthesize once from completed branches after real descendants have returned."""
-            root_requests.append(request)
+            main_requests.append(request)
             payload = json.loads(request.messages[1].content)
             return finish(
                 payload["evidence"],
@@ -252,7 +252,6 @@ class DockerREPLIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 await workspace.publish_edge(
                     "a",
                     "b",
-                    relation="depends_on",
                     provenance=Provenance("user", "docker-contract"),
                 )
                 await workspace.append_journal(
@@ -264,12 +263,12 @@ class DockerREPLIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 )
                 async with await Evidence.open(workspace) as evidence:
                     engine = NodeRuntime(
-                        CallableModelClient(root),
+                        CallableModelClient(main),
                         CallableModelClient(child),
                         QueryEvidence(evidence, {}, None),
                         budget=Budget(
                             max_model_calls=20,
-                            max_sidecar_calls=18,
+                            max_reader_calls=18,
                             max_context_tokens=50000,
                             max_evidence_tokens=50000,
                             max_bundle_tokens=12000,
@@ -283,7 +282,7 @@ class DockerREPLIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     )
                     self.assertEqual(result.status, "completed", str(result.evidence.unresolved))
                     self.assertEqual({ref.node_id for ref in result.references}, {"b", "c"})
-                    self.assertEqual(len(root_requests), 1)
+                    self.assertEqual(len(main_requests), 1)
                     self.assertEqual(len(sessions), 3)
                     self.assertEqual(
                         sum(
@@ -293,7 +292,7 @@ class DockerREPLIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         ),
                         2,
                     )
-                    self.assertNotIn("Unneeded long source", str(root_requests))
+                    self.assertNotIn("Unneeded long source", str(main_requests))
                     initial_a = next(
                         request
                         for request in child_requests

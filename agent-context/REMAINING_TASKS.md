@@ -26,7 +26,7 @@ usage have observable tests. Estimates are clearly separate from provider bills.
 
 Both retriever adapters exist. Combined retrieval is not an application default.
 Compare BM25, ColBERTv2/PLAID and combined candidate pools under fixed seed and
-evidence limits. The [node-search runbook](../experiments/node-search.md) locates tooling.
+evidence limits. The [LongMemEval runbook](../experiments/longmemeval.md) locates tooling.
 **Done when:** Retained rankings and matched answer trials separate candidate
 coverage, seed choice, evidence delivery and answer quality, including failures.
 
@@ -70,3 +70,13 @@ Validate installable artifacts, package metadata, README assets and versioned
 documentation through the [publishing guide](../development/publishing.md).
 **Done when:** A released distribution reproduces documented workflows outside
 the checkout, and release documentation states the capabilities actually verified.
+
+## T13: Measure topic boundaries and gigantic-node reasoning
+
+Conversation routing and segmented turn storage are implemented. Deterministic
+checks protect node reuse, split decisions, restart, citations and bounded span
+I/O. Hosted routing quality and huge-node answer quality remain unmeasured.
+Imported batches route as one unit. Splitting within a mixed-topic batch remains
+open. Compare archive size and node size independently with a direct-reader
+control. **Done when:** Retained measurements cover false splits, missed splits,
+topic returns, large turns, per-node RLM work, graph growth and complete costs.

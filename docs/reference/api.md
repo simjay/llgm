@@ -314,7 +314,7 @@ See [architecture](../guide/architecture.md) for the complete question flow.
 ```
 
 The converter preserves the original local schema-2 workspace and requires
-explicit classifications before copying its records into schema 3. See
+explicit classifications before copying its records into schema 5. See
 [existing databases](../guide/configuration.md#existing-databases).
 
 ## Errors
@@ -357,15 +357,16 @@ stopping rules. Most applications can use the integrated workflow above.
 
 ### Iterative retrieval
 
-Construct `EvidenceSidecar` with a model, a retriever, and a search policy.
-Pass it and the root model to `IterativeRuntime`. The caller closes the model
-and retrieval resources.
+Construct `EvidenceReader` with a model, a retriever, and a search policy.
+Pass them as `IterativeRuntime(main_model=..., reader=...)`. The `reader`
+argument is an `EvidenceReader` component containing its model and retriever.
+The caller closes the model and retrieval resources.
 
 ```{eval-rst}
 .. autoclass:: llgm.inference.iterative.IterativeRuntime
    :members:
 
-.. autoclass:: llgm.inference.iterative.EvidenceSidecar
+.. autoclass:: llgm.inference.iterative.EvidenceReader
    :members:
 ```
 
@@ -398,3 +399,6 @@ caller-supplied context.
 .. autoclass:: llgm.inference.rlm.RLMResult
    :members:
 ```
+
+Schema-3 local workspaces can be copied with
+`llgm migrate OLD_WORKSPACE NEW_WORKSPACE`.

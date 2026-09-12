@@ -22,11 +22,11 @@ from llgm.storage import LocalBlobStore
 
 
 async def copy_schema3_workspace(source: str | Path, destination: str | Path) -> dict:
-    """Copy local schema-3 evidence into schema 4 without modifying the original.
+    """Copy local schema-3 evidence into schema 5 without modifying the original.
 
     Source and journal identities remain unchanged. Existing primary edges keep
-    their recorded provenance and labels as historical data. New automatic
-    connections use only related_to. The destination must not exist.
+    their recorded provenance. Connection labels are removed. The destination
+    must not exist. Conflicting duplicate connections reject conversion.
     """
     source, destination = Path(source).resolve(), Path(destination).resolve()
     if destination.exists() or source == destination or source in destination.parents:
@@ -60,18 +60,19 @@ async def copy_schema3_workspace(source: str | Path, destination: str | Path) ->
                     count += 1
                 copied.execute("BEGIN IMMEDIATE")
                 _create_conversation_tables(copied)
+                _remove_edge_labels(copied)
                 copied.execute(
                     "UPDATE workspace_metadata SET value=? WHERE key='workspace_id'",
                     (uuid.uuid4().hex,),
                 )
-                copied.execute("PRAGMA user_version=4")
+                copied.execute("PRAGMA user_version=5")
                 copied.execute("COMMIT")
             finally:
                 copied.close()
                 original.close()
             report = {
                 "source_schema": 3,
-                "workspace_schema": 4,
+                "workspace_schema": 5,
                 "source_count": count,
                 "history_preserved": True,
             }
@@ -96,7 +97,7 @@ async def copy_schema2_workspace(
     ``edge``, ``amendment``, or ``unresolved``. Unresolved records remain readable
     in history but block effective operational reads. Only uncorrected whole-node
     assertion links can be promoted. Source blobs and original journals retain
-    schema 2. The copied workspace metadata uses schema 4. Existing destinations
+    schema 2. The copied workspace metadata uses schema 5. Existing destinations
     are refused and source metadata is opened read-only.
     """
     source, destination = Path(source).resolve(), Path(destination).resolve()
@@ -181,7 +182,7 @@ async def copy_schema2_workspace(
                     "UPDATE workspace_metadata SET value=? WHERE key='workspace_id'",
                     (uuid.uuid4().hex,),
                 )
-                copied.execute("PRAGMA user_version=4")
+                copied.execute("PRAGMA user_version=5")
                 copied.execute("COMMIT")
                 return records
             finally:
@@ -215,7 +216,6 @@ async def copy_schema2_workspace(
                     edge = await workspace.publish_edge(
                         entry.owning_node_id,
                         entry.value.node_id,
-                        relation=entry.relation,
                         provenance=entry.provenance,
                         applicability=entry.applicability,
                         idempotency_key="schema2-journal:" + entry_id,
@@ -243,7 +243,7 @@ async def copy_schema2_workspace(
             stats = await workspace._run(classify)
         report = {
             "source_schema": 2,
-            "workspace_schema": 4,
+            "workspace_schema": 5,
             "source_path": str(source),
             "source_count": len(stats),
             "journal_classifications": mappings,
@@ -255,3 +255,26 @@ async def copy_schema2_workspace(
             raise ConfigurationError("Migration destination appeared before publication")
         staged.rename(destination)
         return report
+
+
+def _remove_edge_labels(connection: sqlite3.Connection) -> None:
+    """Remove legacy connection labels in a staged copy without changing source evidence."""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(edges)")}
+    if "relation" not in columns:
+        return
+    connection.execute("DROP INDEX edges_outgoing")
+    connection.execute("ALTER TABLE edges DROP COLUMN relation")
+    connection.execute("CREATE INDEX edges_outgoing ON edges(source_node_id)")
+    for edge_id, payload in connection.execute("SELECT edge_id,payload FROM edges").fetchall():
+        record = json.loads(payload)
+        record.pop("relation", None)
+        identity = json.dumps(
+            {key: record[key] for key in ("source_node_id", "target_node_id", "applicability")},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        connection.execute(
+            "UPDATE edges SET identity=?,payload=? WHERE edge_id=?",
+            (identity, json.dumps(record), edge_id),
+        )

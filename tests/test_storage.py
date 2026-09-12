@@ -196,7 +196,7 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
     async def test_journal_rejects_dangling_and_wrong_owner(self):
         """Dangling and incorrectly owned journal references never publish."""
         await self.source()
-        common = {"relation": "related_to", "provenance": Provenance("user", "fixture")}
+        common = {"relation": "note", "provenance": Provenance("user", "fixture")}
         with self.assertRaises(ReferenceResolutionError):
             await self.memory.append_journal(
                 "a", subject=NodeRef("a"), value=NodeRef("missing"), **common
@@ -237,8 +237,8 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
                 return await memory.append_journal(
                     "a",
                     subject=NodeRef("a"),
-                    relation="related_to",
                     value=text,
+                    relation="note",
                     provenance=Provenance("user", "fixture"),
                     expected_sequence=0,
                 )

@@ -1,6 +1,7 @@
 """Large Language Graphical Model: persistent conversations and recursive reading.
 
-Store evidence with ``LLGM.ingest()`` and ask questions with ``LLGM.answer()``.
+Continue conversations with ``LLGM.answer()``. Import earlier history with
+``LLGM.ingest()``.
 Local model readers return selected findings and source excerpts to a final
 answer model. References keep the supporting original text inspectable.
 

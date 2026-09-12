@@ -120,20 +120,19 @@ class EvidenceFixture:
         )
         return [ResolvedEvidence(text[span.start : span.end], span, {"role": "user"})]
 
-    async def neighbors(self, node_id, relation=None):
+    async def neighbors(self, node_id):
         """Return a primary edge independently of the journal's inline note."""
         return [NodeRef("b")] if node_id == "a" else []
 
-    async def edge_descriptions(self, node_id, relation=None):
+    async def edge_descriptions(self, node_id):
         """Describe the fixture's stored relationship without adding inferred relevance."""
-        if node_id != "a" or relation not in (None, "credential"):
+        if node_id != "a":
             return []
         return [
             {
                 "edge_id": "edge-a-b",
                 "source_node_id": "a",
                 "reference": reference_to_dict(NodeRef("b")),
-                "relation": "credential",
                 "provenance": {
                     "origin": "user",
                     "producer": "node-test",
@@ -153,7 +152,7 @@ def runtime(models=None, evidence=None, factory=None, **options):
     defaults = {
         "budget": Budget(
             max_model_calls=40,
-            max_sidecar_calls=36,
+            max_reader_calls=36,
             max_evidence_tokens=50000,
             max_context_tokens=50000,
             max_bundle_tokens=12000,
@@ -167,15 +166,15 @@ def runtime(models=None, evidence=None, factory=None, **options):
         factory or ReplayFactory(),
     )
     return (
-        NodeRuntime(models.root, models.sidecar, evidence, repl_factory=factory, **defaults),
+        NodeRuntime(models.main, models.reader, evidence, repl_factory=factory, **defaults),
         models,
         evidence,
         factory,
     )
 
 
-def test_all_seeds_contribute_to_one_root_without_raw_local_history():
-    """All admitted seeds return attributed findings before the single final root call."""
+def test_all_seeds_contribute_to_one_main_without_raw_local_history():
+    """All admitted seeds return attributed findings before the single final main call."""
 
     async def scenario():
         """Collect a recursive A-to-B branch and an independent C branch under one registry."""
@@ -183,11 +182,11 @@ def test_all_seeds_contribute_to_one_root_without_raw_local_history():
         result = await engine.answer("Where and when?", seeds=[NodeSeed("a"), NodeSeed("c")])
         assert result.status == "completed"
         assert {ref.node_id for ref in result.references} == {"b", "c"}
-        assert len(models.root_requests) == 1
-        root_context = json.loads(models.root_requests[0].messages[1].content)
-        assert [branch["node_id"] for branch in root_context["branches"]] == ["a", "c"]
+        assert len(models.main_requests) == 1
+        main_context = json.loads(models.main_requests[0].messages[1].content)
+        assert [branch["node_id"] for branch in main_context["branches"]] == ["a", "c"]
         assert (
-            "Long uncited local source sentinel" not in models.root_requests[0].messages[1].content
+            "Long uncited local source sentinel" not in models.main_requests[0].messages[1].content
         )
         initial = [request for request in models.child_requests if len(request.messages) == 2]
         assert all(
@@ -250,7 +249,7 @@ def test_three_seed_limit_two_queues_third_and_bounds_model_calls():
             finally:
                 active -= 1
 
-        models.sidecar = CallableModelClient(held)
+        models.reader = CallableModelClient(held)
         engine, _, evidence, factory = runtime(models, max_concurrency=2)
         task = asyncio.create_task(
             engine.answer("Question", seeds=[NodeSeed(n) for n in ("a", "b", "c")])
@@ -303,12 +302,12 @@ def test_three_seeds_keep_finish_calls_and_finalize_instead_of_repeating_reads(l
                 operation = {"op": "python", "code": READ}
             return ModelResponse(json.dumps({"operation": operation}))
 
-        models.sidecar = CallableModelClient(
+        models.reader = CallableModelClient(
             investigate, capabilities=ModelCapabilities(structured_output=True)
         )
         budget = Budget(
             max_model_calls=7 if limit == "shared_calls" else 40,
-            max_sidecar_calls=6 if limit == "shared_calls" else 36,
+            max_reader_calls=6 if limit == "shared_calls" else 36,
             max_context_tokens=50000,
             max_evidence_tokens=50000,
             max_bundle_tokens=12000,
@@ -320,8 +319,8 @@ def test_three_seeds_keep_finish_calls_and_finalize_instead_of_repeating_reads(l
         assert result.status == "completed"
         assert {reference.node_id for reference in result.references} == set("abc")
         assert Counter(finish_requests) == Counter("abc")
-        assert len(models.child_requests) == 6 and len(models.root_requests) == 1
-        assert result.usage["sidecar_calls"] == 6 and result.usage["model_calls"] == 7
+        assert len(models.child_requests) == 6 and len(models.main_requests) == 1
+        assert result.usage["reader_calls"] == 6 and result.usage["model_calls"] == 7
         assert Counter(reference.node_id for reference in evidence.reads) == Counter("abc")
         assert set(factory.started) == set("abc") and all(s.closed for s in factory.sessions)
 
@@ -335,7 +334,7 @@ def test_child_admission_preserves_parent_finish_when_two_child_calls_do_not_fit
         """Attempt recursion with only one unreserved child call and retain an explicit admission gap."""
         budget = Budget(
             max_model_calls=4,
-            max_sidecar_calls=3,
+            max_reader_calls=3,
             max_context_tokens=50000,
             max_evidence_tokens=50000,
             max_bundle_tokens=12000,
@@ -344,8 +343,8 @@ def test_child_admission_preserves_parent_finish_when_two_child_calls_do_not_fit
         result = await engine.answer("Question", seeds=[NodeSeed("a")])
         assert result.status == "partial" and not result.references
         assert factory.started == ["a"]
-        assert len(models.root_requests) == 1
-        assert result.usage["sidecar_calls"] <= 3
+        assert len(models.main_requests) == 1
+        assert result.usage["reader_calls"] <= 3
         assert any("call" in gap.lower() for gap in result.evidence.unresolved)
         assert not any(
             event["kind"] == "repl_open" and event["target_node_id"] == "b"
@@ -386,12 +385,12 @@ def test_parent_budget_exhaustion_preserves_delivered_child_findings_only():
         engine, models, evidence, _ = runtime(Models({"a": [READ, CHILD]}), factory=create)
         result = await engine.answer("Question", seeds=[NodeSeed("a")])
         assert result.status == "partial"
-        assert result.usage["sidecar_calls"] == 4 and result.usage["model_calls"] == 5
+        assert result.usage["reader_calls"] == 4 and result.usage["model_calls"] == 5
         assert {reference.node_id for reference in evidence.reads} == {"a", "b"}
         assert {reference.node_id for reference in result.references} == {"b"}
-        assert len(models.root_requests) == 1
-        root_context = json.loads(models.root_requests[0].messages[1].content)
-        branch = root_context["branches"][0]
+        assert len(models.main_requests) == 1
+        main_context = json.loads(models.main_requests[0].messages[1].content)
+        branch = main_context["branches"][0]
         child = next(
             event
             for event in result.trace
@@ -404,7 +403,7 @@ def test_parent_budget_exhaustion_preserves_delivered_child_findings_only():
         assert child["invocation_id"] in branch["findings"]
         assert any("allowance" in gap for gap in branch["unresolved"])
         assert (
-            "Long uncited local source sentinel" not in models.root_requests[0].messages[1].content
+            "Long uncited local source sentinel" not in models.main_requests[0].messages[1].content
         )
         assert all(session.closed for session in factory.sessions)
 
@@ -428,7 +427,7 @@ def test_exhausted_ancestors_forward_the_same_delivered_grandchild_findings():
         assert returns["a"]["status"] == returns["b"]["status"] == "budget_exhausted"
         assert returns["a"]["evidence"] == returns["b"]["evidence"] == returns["c"]["evidence"]
         assert sum(bool(returns[node]["evidence"]) for node in ("b", "c")) == 2
-        assert result.usage["model_calls"] == 5 and len(models.root_requests) == 1
+        assert result.usage["model_calls"] == 5 and len(models.main_requests) == 1
         assert len(owner.sessions) == 3 and all(session.closed for session in owner.sessions)
 
     asyncio.run(scenario())
@@ -447,7 +446,7 @@ def test_local_reads_without_a_selected_child_are_not_preserved_on_exhaustion():
         assert engine.last_branches[0]["status"] == "budget_exhausted"
         assert not engine.last_branches[0]["evidence"]
         assert (
-            "Long uncited local source sentinel" not in models.root_requests[0].messages[1].content
+            "Long uncited local source sentinel" not in models.main_requests[0].messages[1].content
         )
 
     asyncio.run(scenario())
@@ -468,7 +467,7 @@ def test_parent_schema_error_does_not_activate_budget_preservation():
                 return ModelResponse(finish("Unsupported parent finding", ["not-visible"]))
             return await original(request)
 
-        models.sidecar = CallableModelClient(invalid_finish)
+        models.reader = CallableModelClient(invalid_finish)
         engine, _, _, _ = runtime(models)
         result = await engine.answer("Question", seeds=[NodeSeed("a")])
         assert result.status == "partial" and not result.references
@@ -484,16 +483,16 @@ def test_parent_schema_error_does_not_activate_budget_preservation():
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("boundary", ["transport", "aggregate_bundle", "root_context"])
+@pytest.mark.parametrize("boundary", ["transport", "aggregate_bundle", "main_context"])
 def test_budget_preservation_respects_delivery_and_aggregate_return_limits(boundary):
-    """Undelivered or oversized child findings cannot bypass transport, bundle, or root-context admission."""
+    """Undelivered or oversized child findings cannot bypass transport, bundle, or main-context admission."""
 
     async def scenario():
         """Make child answers fit their local bundle, then deny their parent transfer or aggregate fallback."""
         plans = {"a": [CHILD, THIRD_CHILD] if boundary == "aggregate_bundle" else [CHILD]}
         models = Models(plans)
         original = models.child
-        answer = "\\" * 1700 if boundary == "root_context" else "Child finding " * 40
+        answer = "\\" * 1700 if boundary == "main_context" else "Child finding " * 40
 
         async def long_findings(request):
             """Select actual child evidence while varying only the returned finding size."""
@@ -505,14 +504,14 @@ def test_budget_preservation_respects_delivery_and_aggregate_return_limits(bound
                 )
             return await original(request)
 
-        models.sidecar = CallableModelClient(long_findings)
+        models.reader = CallableModelClient(long_findings)
         owner, factory = third_node_replay(
             exhaust_after={"a": THIRD_CHILD if boundary == "aggregate_bundle" else CHILD}
         )
         budget = Budget(
             max_model_calls=40,
-            max_sidecar_calls=36,
-            max_context_tokens=8000 if boundary == "root_context" else 50000,
+            max_reader_calls=36,
+            max_context_tokens=8000 if boundary == "main_context" else 50000,
             max_evidence_tokens=50000,
             max_bundle_tokens=1000 if boundary == "aggregate_bundle" else 7000,
             max_output_tokens=1000,
@@ -525,7 +524,7 @@ def test_budget_preservation_respects_delivery_and_aggregate_return_limits(bound
         engine, _, _, _ = runtime(models, factory=factory, budget=budget, repl_config=config)
         result = await engine.answer("Question", seeds=[NodeSeed("a")])
         assert result.status == "partial" and not result.references
-        assert len(models.root_requests) == 1
+        assert len(models.main_requests) == 1
         branch = engine.last_branches[0]
         assert branch["status"] == "budget_exhausted" and not branch["evidence"]
         delivered = [
@@ -541,7 +540,7 @@ def test_budget_preservation_respects_delivery_and_aggregate_return_limits(bound
         else:
             assert len(delivered) == (2 if boundary == "aggregate_bundle" else 1)
             assert any("omitt" in gap.lower() for gap in branch["unresolved"])
-        assert answer not in models.root_requests[0].messages[1].content
+        assert answer not in models.main_requests[0].messages[1].content
         assert all(session.closed for session in owner.sessions)
 
     asyncio.run(scenario())
@@ -563,8 +562,8 @@ def test_overlapping_seed_branches_keep_isolated_invocations_and_shared_evidence
             "Find the region",
         }
         assert len([reference for reference in evidence.reads if reference.node_id == "b"]) == 2
-        root_request = models.root_requests[0]
-        payload = json.loads(root_request.messages[1].content)
+        main_request = models.main_requests[0]
+        payload = json.loads(main_request.messages[1].content)
         branches = payload["branches"]
         assert [branch["node_id"] for branch in branches] == ["a", "b"]
         assert branches[0]["invocation_id"] != branches[1]["invocation_id"]
@@ -576,7 +575,7 @@ def test_overlapping_seed_branches_keep_isolated_invocations_and_shared_evidence
     asyncio.run(scenario())
 
 
-def test_root_presents_attributed_sources_before_findings_without_changing_evidence():
+def test_main_presents_attributed_sources_before_findings_without_changing_evidence():
     """Lift dates and roles for synthesis while preserving every canonical record and metadata field."""
 
     async def scenario():
@@ -605,7 +604,7 @@ def test_root_presents_attributed_sources_before_findings_without_changing_evide
         engine, models, _, _ = runtime(evidence=evidence)
         result = await engine.answer("Which date applies?", seeds=[NodeSeed("b"), NodeSeed("c")])
         assert result.status == "completed"
-        payload = json.loads(models.root_requests[0].messages[1].content)
+        payload = json.loads(models.main_requests[0].messages[1].content)
         assert list(payload).index("evidence") < list(payload).index("branches")
         assert [record["role"] for record in payload["evidence"]] == ["user", "assistant"]
         originals = {
@@ -637,8 +636,8 @@ def test_root_presents_attributed_sources_before_findings_without_changing_evide
 
 
 @pytest.mark.parametrize("metadata_key", ["note", "date"])
-def test_root_reserves_the_expanded_attribution_presentation(metadata_key):
-    """Lifted source dates count toward root context even when the canonical branch fits its bundle."""
+def test_main_reserves_the_expanded_attribution_presentation(metadata_key):
+    """Lifted source dates count toward main context even when the canonical branch fits its bundle."""
 
     async def scenario():
         """Keep the same metadata bytes, lifting them only when they are the source date."""
@@ -658,7 +657,7 @@ def test_root_reserves_the_expanded_attribution_presentation(metadata_key):
             """Keep source metadata in Python and print only learned citation IDs."""
 
             async def execute(self, code):
-                """Deliver a real read without using its full metadata as the sidecar observation."""
+                """Deliver a real read without using its full metadata as the reader observation."""
                 assert code == READ
                 payload = await self.callback(
                     {"op": "read", "reference": self.context["references"][0]}
@@ -680,8 +679,8 @@ def test_root_reserves_the_expanded_attribution_presentation(metadata_key):
             budget=Budget(max_context_tokens=10000, max_output_tokens=1000, max_bundle_tokens=7000),
         )
         result = await engine.answer("Region?", seeds=[NodeSeed("b")])
-        assert len(models.root_requests) == 1
-        request = models.root_requests[0]
+        assert len(models.main_requests) == 1
+        request = models.main_requests[0]
         assert RunLedger(engine.budget, len).context_size(request.messages) + 1000 <= 10000
         if metadata_key == "date":
             assert result.status == "partial" and not result.references
@@ -719,7 +718,7 @@ def test_failed_callback_payload_does_not_make_registered_citations_visible(fail
                 )
             return ModelResponse(finish("Guessed hidden evidence", ["e1"]))
 
-        models.sidecar = CallableModelClient(child)
+        models.reader = CallableModelClient(child)
         options = {}
         if failure == "later_segment":
 
@@ -733,7 +732,7 @@ def test_failed_callback_payload_does_not_make_registered_citations_visible(fail
             evidence.read_segments = segments
             options["budget"] = Budget(
                 max_model_calls=10,
-                max_sidecar_calls=9,
+                max_reader_calls=9,
                 max_evidence_tokens=1000,
                 max_context_tokens=16000,
                 max_bundle_tokens=6000,
@@ -754,16 +753,16 @@ def test_failed_callback_payload_does_not_make_registered_citations_visible(fail
             for event in result.trace
         )
         assert all(not branch["evidence"] for branch in engine.last_branches)
-        assert len(models.root_requests) == 1
+        assert len(models.main_requests) == 1
 
     asyncio.run(scenario())
 
 
-def test_failed_branch_keeps_successful_findings_and_cannot_be_hidden_by_root():
-    """A branch's provider failure survives root wording while successful sibling evidence remains usable."""
+def test_failed_branch_keeps_successful_findings_and_cannot_be_hidden_by_main():
+    """A branch's provider failure survives main wording while successful sibling evidence remains usable."""
 
     async def scenario():
-        """Fail one branch and make the root omit its unresolved field intentionally."""
+        """Fail one branch and make the main omit its unresolved field intentionally."""
         models = Models()
         original = models.child
 
@@ -773,15 +772,15 @@ def test_failed_branch_keeps_successful_findings_and_cannot_be_hidden_by_root():
                 raise ProviderError("deliberate branch failure")
             return await original(request)
 
-        async def root(request):
+        async def main(request):
             """Return the good citation without volunteering the failed branch's gap."""
-            models.root_requests.append(request)
+            models.main_requests.append(request)
             records = json.loads(request.messages[1].content)["evidence"]
             return ModelResponse(
                 finish("Only supported findings", [record["id"] for record in records])
             )
 
-        models.sidecar, models.root = CallableModelClient(child), CallableModelClient(root)
+        models.reader, models.main = CallableModelClient(child), CallableModelClient(main)
         engine, _, _, factory = runtime(models)
         result = await engine.answer("Question", seeds=[NodeSeed("a"), NodeSeed("b")])
         assert result.status == "partial"
@@ -808,16 +807,16 @@ def test_repaired_read_schema_error_does_not_force_a_final_gap():
             for event in result.trace
         )
         assert engine.last_branches[0]["required_gaps"] == []
-        assert len(models.root_requests) == 1
+        assert len(models.main_requests) == 1
 
     asyncio.run(scenario())
 
 
-def test_root_can_resolve_a_local_missing_fact_from_another_seed():
+def test_main_can_resolve_a_local_missing_fact_from_another_seed():
     """A delegate's local absence statement is visible to synthesis without forcing global incompleteness."""
 
     async def scenario():
-        """Leave A's local gap in its branch while the root answers from B's observed region."""
+        """Leave A's local gap in its branch while the main answers from B's observed region."""
         models = Models()
         original = models.child
 
@@ -832,12 +831,12 @@ def test_root_can_resolve_a_local_missing_fact_from_another_seed():
 
         async def synthesize(request):
             """Use B's evidence and explicitly resolve the irrelevant local absence in A."""
-            models.root_requests.append(request)
+            models.main_requests.append(request)
             branches = json.loads(request.messages[1].content)["branches"]
             selected = next(branch for branch in branches if branch["node_id"] == "b")
             return ModelResponse(finish("eu-west-1", selected["citations"]))
 
-        models.sidecar, models.root = CallableModelClient(local), CallableModelClient(synthesize)
+        models.reader, models.main = CallableModelClient(local), CallableModelClient(synthesize)
         engine, _, _, _ = runtime(models)
         result = await engine.answer("Region?", seeds=[NodeSeed("a"), NodeSeed("b")])
         assert result.status == "completed" and not result.evidence.unresolved
@@ -845,12 +844,12 @@ def test_root_can_resolve_a_local_missing_fact_from_another_seed():
         branch = next(branch for branch in engine.last_branches if branch["node_id"] == "a")
         assert "This node has no region." in branch["unresolved"]
         assert branch["required_gaps"] == []
-        assert "This node has no region." in models.root_requests[0].messages[1].content
+        assert "This node has no region." in models.main_requests[0].messages[1].content
 
     asyncio.run(scenario())
 
 
-def test_journal_gap_is_attributed_and_cannot_be_hidden_by_final_root():
+def test_journal_gap_is_attributed_and_cannot_be_hidden_by_final_main():
     """Host-detected journal uncertainty remains mandatory even when the model omits it."""
 
     async def scenario():
@@ -867,7 +866,7 @@ def test_journal_gap_is_attributed_and_cannot_be_hidden_by_final_root():
 
         async def synthesize(request):
             """Deliberately omit the mandatory gap from otherwise valid cited synthesis."""
-            models.root_requests.append(request)
+            models.main_requests.append(request)
             evidence = json.loads(request.messages[1].content)["evidence"]
             return ModelResponse(
                 finish(
@@ -877,7 +876,7 @@ def test_journal_gap_is_attributed_and_cannot_be_hidden_by_final_root():
             )
 
         evidence.initialize_node = unresolved_journal
-        models.root = CallableModelClient(synthesize)
+        models.main = CallableModelClient(synthesize)
         engine, _, _, _ = runtime(models, evidence)
         result = await engine.answer("Region?", seeds=[NodeSeed("b")])
         assert result.status == "partial"
@@ -890,7 +889,7 @@ def test_journal_gap_is_attributed_and_cannot_be_hidden_by_final_root():
     asyncio.run(scenario())
 
 
-def test_failed_child_gap_reaches_root_when_parent_and_root_omit_it():
+def test_failed_child_gap_reaches_main_when_parent_and_main_omit_it():
     """A failed recursive investigation remains an attributed mandatory gap through parent synthesis."""
 
     async def scenario():
@@ -907,12 +906,12 @@ def test_failed_child_gap_reaches_root_when_parent_and_root_omit_it():
                 return ModelResponse(finish("Unknown from this investigation"))
             return await original(request)
 
-        async def root(request):
+        async def main(request):
             """Try to return an apparently complete answer despite the failed child branch."""
-            models.root_requests.append(request)
+            models.main_requests.append(request)
             return ModelResponse(finish("Unknown"))
 
-        models.sidecar, models.root = CallableModelClient(child), CallableModelClient(root)
+        models.reader, models.main = CallableModelClient(child), CallableModelClient(main)
         engine, _, _, _ = runtime(models)
         result = await engine.answer("Region?", seeds=[NodeSeed("a")])
         assert result.status == "partial" and not result.references
@@ -921,17 +920,17 @@ def test_failed_child_gap_reaches_root_when_parent_and_root_omit_it():
             for gap in result.evidence.unresolved
         )
         assert engine.last_branches[0]["required_gaps"]
-        assert len(models.root_requests) == 1
+        assert len(models.main_requests) == 1
 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("native_root", [False, True])
-def test_empty_answer_with_explicit_abstention_is_valid_after_inspection(native_root):
+@pytest.mark.parametrize("native_main", [False, True])
+def test_empty_answer_with_explicit_abstention_is_valid_after_inspection(native_main):
     """An inspected but insufficient source permits an empty answer with an explicit unresolved reason."""
 
     async def scenario():
-        """Abstain in the delegate and final root without treating empty text as a schema failure."""
+        """Abstain in the delegate and final main without treating empty text as a schema failure."""
         models = Models()
         original = models.child
 
@@ -941,14 +940,14 @@ def test_empty_answer_with_explicit_abstention_is_valid_after_inspection(native_
                 return ModelResponse(finish("", [], ["No requested fact in this source"]))
             return await original(request)
 
-        async def root(request):
+        async def main(request):
             """Return the same explicit abstention as a valid final result."""
-            models.root_requests.append(request)
+            models.main_requests.append(request)
             return ModelResponse(finish("", [], ["No supported answer available"]))
 
-        models.sidecar = CallableModelClient(abstain)
-        models.root = CallableModelClient(
-            root, capabilities=ModelCapabilities(structured_output=native_root)
+        models.reader = CallableModelClient(abstain)
+        models.main = CallableModelClient(
+            main, capabilities=ModelCapabilities(structured_output=native_main)
         )
         engine, _, evidence, _ = runtime(models)
         result = await engine.answer("Missing fact?", seeds=[NodeSeed("b")])
@@ -956,9 +955,9 @@ def test_empty_answer_with_explicit_abstention_is_valid_after_inspection(native_
         assert evidence.reads and result.evidence.unresolved == ["No supported answer available"]
         assert engine.last_branches[0]["status"] == "partial"
         assert not any(event.get("error_type") == "SchemaError" for event in result.trace)
-        assert len(models.root_requests) == 1
-        schema = models.root_requests[0].output_schema
-        if native_root:
+        assert len(models.main_requests) == 1
+        schema = models.main_requests[0].output_schema
+        if native_main:
             assert schema["properties"]["citations"] == {
                 "type": "array",
                 "items": {"type": "string"},
@@ -970,13 +969,13 @@ def test_empty_answer_with_explicit_abstention_is_valid_after_inspection(native_
     asyncio.run(scenario())
 
 
-def test_native_root_schema_admits_only_selected_branch_evidence_ids():
+def test_native_main_schema_admits_only_selected_branch_evidence_ids():
     """Native synthesis can cite selected returned evidence without exposing unselected local reads."""
 
     async def scenario():
-        """Read A, select its child's B finding, and restrict the sole root request accordingly."""
+        """Read A, select its child's B finding, and restrict the sole main request accordingly."""
         models = Models({"a": [READ, CHILD]})
-        models.root = CallableModelClient(
+        models.main = CallableModelClient(
             models.synthesize, capabilities=ModelCapabilities(structured_output=True)
         )
         engine, _, evidence, _ = runtime(models)
@@ -984,8 +983,8 @@ def test_native_root_schema_admits_only_selected_branch_evidence_ids():
         assert result.status == "completed"
         assert {reference.node_id for reference in evidence.reads} == {"a", "b"}
         assert {reference.node_id for reference in result.references} == {"b"}
-        assert len(models.root_requests) == 1
-        request = models.root_requests[0]
+        assert len(models.main_requests) == 1
+        request = models.main_requests[0]
         branch = json.loads(request.messages[1].content)["branches"][0]
         identifiers = branch["citations"]
         assert request.output_schema["properties"]["citations"]["items"] == {
@@ -995,7 +994,7 @@ def test_native_root_schema_admits_only_selected_branch_evidence_ids():
         assert branch["node_id"] not in identifiers
         assert "Long uncited local source sentinel" not in request.messages[1].content
         event = next(
-            event for event in result.trace if event["kind"] == "model" and event["role"] == "root"
+            event for event in result.trace if event["kind"] == "model" and event["role"] == "main"
         )
         counter = RunLedger(engine.budget, len)
         assert event["context_accounting_units"] == counter.context_size(
@@ -1007,7 +1006,7 @@ def test_native_root_schema_admits_only_selected_branch_evidence_ids():
 
 
 @pytest.mark.parametrize("invalid_citation", ["node_id", "unselected_evidence"])
-def test_native_root_citation_schema_keeps_host_visibility_validation(invalid_citation):
+def test_native_main_citation_schema_keeps_host_visibility_validation(invalid_citation):
     """A native adapter returning a node handle or unselected evidence still fails without repair."""
 
     async def scenario():
@@ -1015,8 +1014,8 @@ def test_native_root_citation_schema_keeps_host_visibility_validation(invalid_ci
         models = Models({"a": [READ, CHILD]})
 
         async def wrong_citation(request):
-            """Return an identifier outside the root schema while retaining the actual request."""
-            models.root_requests.append(request)
+            """Return an identifier outside the main schema while retaining the actual request."""
+            models.main_requests.append(request)
             branch = json.loads(request.messages[1].content)["branches"][0]
             if invalid_citation == "node_id":
                 citation = branch["node_id"]
@@ -1035,15 +1034,15 @@ def test_native_root_citation_schema_keeps_host_visibility_validation(invalid_ci
             assert citation not in request.output_schema["properties"]["citations"]["items"]["enum"]
             return ModelResponse(finish("eu-west-1", [citation]))
 
-        models.root = CallableModelClient(
+        models.main = CallableModelClient(
             wrong_citation, capabilities=ModelCapabilities(structured_output=True)
         )
         engine, _, _, _ = runtime(models)
         result = await engine.answer("Where?", seeds=[NodeSeed("a")])
         assert result.status == "failed" and not result.references
         assert result.answer == ""
-        assert result.evidence.unresolved == ["Root citation was not returned by a node branch"]
-        assert len(models.root_requests) == 1
+        assert result.evidence.unresolved == ["Main citation was not returned by a node branch"]
+        assert len(models.main_requests) == 1
         assert result.usage["model_calls"] == len(models.child_requests) + 1
 
     asyncio.run(scenario())
@@ -1061,7 +1060,7 @@ def test_native_citation_schema_growth_is_reserved_before_branch_return():
     async def scenario():
         """Keep all messages small but make the selected-ID schema exceed synthesis capacity."""
         models = Models()
-        models.root = CallableModelClient(
+        models.main = CallableModelClient(
             models.synthesize, capabilities=ModelCapabilities(structured_output=True)
         )
         engine, _, evidence, _ = runtime(models, token_counter=counter)
@@ -1069,8 +1068,8 @@ def test_native_citation_schema_growth_is_reserved_before_branch_return():
         assert evidence.reads
         assert result.status == "partial" and not result.references
         assert any("synthesis allowance" in gap for gap in result.evidence.unresolved)
-        assert len(models.root_requests) == 1
-        request = models.root_requests[0]
+        assert len(models.main_requests) == 1
+        request = models.main_requests[0]
         assert request.output_schema["properties"]["citations"]["maxItems"] == 0
         assert json.loads(request.messages[1].content)["evidence"] == []
         ledger = RunLedger(engine.budget, counter)
@@ -1107,11 +1106,11 @@ def test_premature_finish_receives_a_corrective_observation_then_reads():
                 finish("eu-west-1", [record["id"] for record in observation["evidence"]])
             )
 
-        models.sidecar = CallableModelClient(premature)
+        models.reader = CallableModelClient(premature)
         engine, _, evidence, _ = runtime(models)
         result = await engine.answer("Region?", seeds=[NodeSeed("b")])
         assert result.status == "completed" and not result.evidence.unresolved
-        assert calls == 3 and len(models.root_requests) == 1
+        assert calls == 3 and len(models.main_requests) == 1
         assert evidence.reads == [SourceSpan("b", "turn", 0, 9)]
 
     asyncio.run(scenario())
@@ -1138,12 +1137,12 @@ def test_initial_retrieval_ledger_and_final_call_reservation_are_shared():
         """Use exactly the remaining three calls without resetting retrieval time or counters."""
         budget = Budget(
             max_model_calls=3,
-            max_sidecar_calls=2,
+            max_reader_calls=2,
             max_searches=1,
             max_evidence_tokens=10000,
             max_bundle_tokens=6000,
         )
-        ledger = RunLedger(budget, len, reserve_root=True)
+        ledger = RunLedger(budget, len, reserve_main=True)
         ledger.searches = 1
         ledger.events.append(
             {
@@ -1159,19 +1158,19 @@ def test_initial_retrieval_ledger_and_final_call_reservation_are_shared():
         assert "seed_limit" in str(result.evidence.unresolved)
         assert result.usage["model_calls"] == 3 and result.usage["searches"] == 1
         assert ledger.started == started
-        assert "seed_limit" in models.root_requests[0].messages[1].content
+        assert "seed_limit" in models.main_requests[0].messages[1].content
 
     asyncio.run(scenario())
 
 
 def test_node_collection_deadline_leaves_time_for_final_synthesis():
-    """A slow node is stopped before the shared deadline so the root can report partial findings."""
+    """A slow node is stopped before the shared deadline so the main can report partial findings."""
 
     async def scenario():
-        """Spend the collection slice in a hanging generation call and still invoke the root once."""
+        """Spend the collection slice in a hanging generation call and still invoke the main once."""
         budget = Budget(
             max_model_calls=4,
-            max_sidecar_calls=3,
+            max_reader_calls=3,
             timeout_seconds=0.4,
             max_evidence_tokens=10000,
             max_bundle_tokens=6000,
@@ -1182,10 +1181,10 @@ def test_node_collection_deadline_leaves_time_for_final_synthesis():
             """Require collection cancellation instead of voluntarily returning."""
             await asyncio.Event().wait()
 
-        engine.sidecar_model = CallableModelClient(slow)
+        engine.reader_model = CallableModelClient(slow)
         result = await engine.answer("Question", seeds=[NodeSeed("b")])
         assert result.status == "partial"
-        assert len(models.root_requests) == 1
+        assert len(models.main_requests) == 1
         assert result.usage["model_calls"] == 2
         assert any(event.get("status") == "timeout" for event in result.trace)
         assert (
@@ -1221,7 +1220,7 @@ def test_unresolved_amendment_cannot_expose_stale_text_or_disappear_from_result(
         result = await engine.answer("Question", seeds=[NodeSeed("a")])
         assert result.status == "partial"
         assert "Replacement unavailable" in str(result.evidence.unresolved)
-        assert "Long uncited local source sentinel" not in str(models.root_requests)
+        assert "Long uncited local source sentinel" not in str(models.main_requests)
 
     asyncio.run(scenario())
 
@@ -1249,7 +1248,7 @@ def test_programming_error_and_cancellation_propagate_after_all_cleanup():
             await asyncio.Event().wait()
 
         engine, _, _, factory = runtime()
-        engine.sidecar_model = CallableModelClient(slow)
+        engine.reader_model = CallableModelClient(slow)
         task = asyncio.create_task(engine.answer("Question", seeds=[NodeSeed("a"), NodeSeed("b")]))
         await entered.wait()
         task.cancel()
@@ -1291,7 +1290,7 @@ def test_final_operation_is_reserved_after_later_branch_exhaustion():
         result = await engine.answer("Question", seeds=[NodeSeed("b"), NodeSeed("c")])
         assert result.status == "partial"
         assert result.usage["operations"] == 6
-        assert len(models.root_requests) == 1
+        assert len(models.main_requests) == 1
         assert {ref.node_id for ref in result.references} == {"b"}
         assert "operation allowance" in str(result.evidence.unresolved)
 
@@ -1299,7 +1298,7 @@ def test_final_operation_is_reserved_after_later_branch_exhaustion():
 
 
 @pytest.mark.parametrize("source", ["\\" * 2500, "🧭" * 1600], ids=["escaped", "utf8"])
-def test_oversized_serialized_seed_return_leaves_final_root_context(source):
+def test_oversized_serialized_seed_return_leaves_final_main_context(source):
     """Escaping and UTF-8 accounting cannot turn an admitted branch into an oversized final prompt."""
 
     async def scenario():
@@ -1328,8 +1327,8 @@ def test_oversized_serialized_seed_return_leaves_final_root_context(source):
             return session
 
         engine = NodeRuntime(
-            models.root,
-            models.sidecar,
+            models.main,
+            models.reader,
             evidence,
             budget=Budget(
                 max_context_tokens=8000,
@@ -1343,7 +1342,7 @@ def test_oversized_serialized_seed_return_leaves_final_root_context(source):
         result = await engine.answer("Question", seeds=[NodeSeed("b")])
         assert result.status == "partial"
         assert "synthesis allowance" in str(result.evidence.unresolved)
-        assert len(models.root_requests) == 1
+        assert len(models.main_requests) == 1
         assert not result.references
         assert all(session.closed for session in factory.sessions)
 
@@ -1413,14 +1412,14 @@ def test_source_info_allows_small_read_without_loading_huge_node(with_passage):
 
         budget = Budget(
             max_model_calls=5,
-            max_sidecar_calls=4,
+            max_reader_calls=4,
             max_evidence_tokens=5000,
             max_context_tokens=16000,
         )
         models = Models({"b": [info_code, slice_code]})
         engine = NodeRuntime(
-            models.root,
-            models.sidecar,
+            models.main,
+            models.reader,
             evidence,
             repl_factory=create,
             budget=budget,
@@ -1435,7 +1434,7 @@ def test_source_info_allows_small_read_without_loading_huge_node(with_passage):
             assert context["references"] == [reference_to_dict(references[0])]
         assert evidence.reads == [SourceSpan("b", "turn", 0, 9)]
         assert "huge unread source sentinel" not in str(models.child_requests) + str(
-            models.root_requests
+            models.main_requests
         )
         assert result.usage["evidence_accounting_units"] < 5000
 

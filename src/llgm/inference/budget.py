@@ -22,7 +22,8 @@ class Budget:
     """Positive per-run limits. Token allowances use the configured counter."""
 
     max_model_calls: int = 9
-    max_sidecar_calls: int = 8
+    max_reader_calls: int = 8
+    max_graph_calls: int = 8
     max_searches: int = 4
     max_evidence_tokens: int = 8000
     max_bundle_tokens: int = 4000
@@ -47,14 +48,15 @@ class Budget:
 class RunLedger:
     """Shared admission limits and accounting for every model invocation in a run."""
 
-    def __init__(self, budget: Budget, token_counter: Callable[[str], int], reserve_root=False):
-        """Start run accounting, optionally reserving a model call for the root."""
+    def __init__(self, budget: Budget, token_counter: Callable[[str], int], reserve_main=False):
+        """Start run accounting, optionally reserving a model call for the main."""
         self.budget = budget
         self.counter = token_counter
-        self.reserve_root = reserve_root
+        self.reserve_main = reserve_main
         self.started = time.monotonic()
         self.calls = 0
-        self.sidecar_calls = 0
+        self.reader_calls = 0
+        self.graph_calls = 0
         self.searches = 0
         self.exposed_tokens = 0
         self.events: list[dict] = []
@@ -84,26 +86,29 @@ class RunLedger:
             amount += self.count(json.dumps(output_schema, ensure_ascii=False, allow_nan=False))
         return amount
 
-    def check_admission(self, messages, role="sidecar", *, output_schema=None):
+    def check_admission(self, messages, role="reader", *, output_schema=None):
         """Check a possible invocation without spending a call, returning its input size."""
+        if not isinstance(role, str) or role not in {"main", "reader", "graph"}:
+            raise ConfigurationError("Model role must be main, reader, or graph")
         self.remaining_seconds()
-        allowance = self.budget.max_model_calls - (self.reserve_root and role != "root")
+        allowance = self.budget.max_model_calls - (self.reserve_main and role != "main")
         if self.calls >= allowance:
             raise BudgetExceeded("Model-call allowance exhausted")
-        if role != "root" and self.sidecar_calls >= self.budget.max_sidecar_calls:
-            raise BudgetExceeded("Sidecar-call allowance exhausted")
+        if role == "reader" and self.reader_calls >= self.budget.max_reader_calls:
+            raise BudgetExceeded("Reader-call allowance exhausted")
+        if role == "graph" and self.graph_calls >= self.budget.max_graph_calls:
+            raise BudgetExceeded("Graph-call allowance exhausted")
         context = self.context_size(messages, output_schema=output_schema)
         if context + self.budget.max_output_tokens > self.budget.max_context_tokens:
             raise BudgetExceeded("Invocation context allowance exceeded")
         return context
 
-    async def call(
-        self, model, messages, role="sidecar", *, output_schema=None, event_context=None
-    ):
+    async def call(self, model, messages, role="reader", *, output_schema=None, event_context=None):
         """Admit one model call and retain usage or failure status without retrying."""
         context = self.check_admission(messages, role, output_schema=output_schema)
         self.calls += 1
-        self.sidecar_calls += role != "root"
+        self.reader_calls += role == "reader"
+        self.graph_calls += role == "graph"
         event = {
             "kind": "model",
             "role": role,
@@ -154,7 +159,8 @@ class RunLedger:
         calls = [event for event in self.events if event["kind"] == "model"]
         return {
             "model_calls": self.calls,
-            "sidecar_calls": self.sidecar_calls,
+            "reader_calls": self.reader_calls,
+            "graph_calls": self.graph_calls,
             "searches": self.searches,
             "evidence_accounting_units": self.exposed_tokens,
             "accounting_tokenizer": getattr(

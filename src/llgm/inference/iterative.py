@@ -46,7 +46,7 @@ _READING_INSTRUCTIONS = (
 )
 
 
-class EvidenceSidecar:
+class EvidenceReader:
     """Iterative single, upfront, or adaptive retrieval with evidence budgeting."""
 
     def __init__(
@@ -192,7 +192,7 @@ class EvidenceSidecar:
                         ),
                     ],
                 )
-                queries = parse_object(output, "Expected a JSON object from the sidecar").get(
+                queries = parse_object(output, "Expected a JSON object from the reader").get(
                     "queries"
                 )
                 if not isinstance(queries, list) or len(queries) != 3:
@@ -238,9 +238,9 @@ class EvidenceSidecar:
                             ),
                         ],
                     )
-                    next_query = parse_object(
-                        output, "Expected a JSON object from the sidecar"
-                    ).get("query", ...)
+                    next_query = parse_object(output, "Expected a JSON object from the reader").get(
+                        "query", ...
+                    )
                     if next_query is None:
                         break
                     query = _query(next_query)
@@ -274,7 +274,7 @@ class EvidenceSidecar:
                     ),
                 ],
             )
-            data = parse_object(output, "Expected a JSON object from the sidecar")
+            data = parse_object(output, "Expected a JSON object from the reader")
             if not isinstance(data.get("text"), str) or not isinstance(
                 data.get("passage_ids"), list
             ):
@@ -322,12 +322,12 @@ class EvidenceSidecar:
 
 
 class IterativeRuntime:
-    """Iterative sidecar gathering followed by one root answer call."""
+    """Iterative reader gathering followed by one main answer call."""
 
-    def __init__(self, *, root, sidecar):
+    def __init__(self, *, main_model, reader):
         """Bind caller-owned clients without opening connections."""
-        self.root = root
-        self.sidecar = sidecar
+        self.main_model = main_model
+        self.reader = reader
 
     async def answer(self, question: str, budget: Budget | None = None, *, question_date=None):
         """Return one answer or an explicit operational failure under a shared run allowance."""
@@ -338,20 +338,20 @@ class IterativeRuntime:
             question_date = question_date.strip()
         if budget is not None and not isinstance(budget, Budget):
             raise ConfigurationError("budget must be a Budget instance")
-        if self.root is None or self.sidecar is None:
-            raise ConfigurationError("Supply both root and sidecar clients")
+        if self.main_model is None or self.reader is None:
+            raise ConfigurationError("Supply both main and reader clients")
         ledger = RunLedger(
             budget or Budget(),
-            self.sidecar.token_counter,
-            reserve_root=True,
+            self.reader.token_counter,
+            reserve_main=True,
         )
         evidence = None
         try:
-            evidence = await self.sidecar.gather(
+            evidence = await self.reader.gather(
                 question, question_date=question_date, _ledger=ledger
             )
             answer = await ledger.call(
-                self.root,
+                self.main_model,
                 [
                     Message(
                         "system",
@@ -372,7 +372,7 @@ class IterativeRuntime:
                         ),
                     ),
                 ],
-                role="root",
+                role="main",
             )
             status = (
                 "partial"

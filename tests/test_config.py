@@ -14,30 +14,30 @@ def test_explicit_file_environment_default_precedence():
     """Explicit values outrank files and environment while omitted fields retain defaults."""
     with tempfile.TemporaryDirectory() as directory:
         file = Path(directory) / "llgm.toml"
-        file.write_text('[llgm]\nmax_searches=3\nsidecar_model="from-file"\n')
+        file.write_text('[llgm]\nmax_searches=3\nreader_model="from-file"\n')
         settings = Settings.load(
             config_file=file,
-            environ={"LLGM_MAX_SEARCHES": "2", "LLGM_ROOT_MODEL": "from-env"},
+            environ={"LLGM_MAX_SEARCHES": "2", "LLGM_MAIN_MODEL": "from-env"},
             overrides={"max_searches": 4},
         )
     assert settings.max_searches == 4
-    assert settings.root_model == "from-env"
-    assert settings.sidecar_model == "from-file"
+    assert settings.main_model == "from-env"
+    assert settings.reader_model == "from-file"
     assert settings.max_model_calls == 40
     assert settings.field_sources["max_searches"] == "explicit"
-    assert settings.field_sources["sidecar_model"] == "file"
-    assert settings.field_sources["root_model"] == "environment"
+    assert settings.field_sources["reader_model"] == "file"
+    assert settings.field_sources["main_model"] == "environment"
 
 
 def test_independent_instances_and_snapshot_of_environment(monkeypatch):
     """Settings capture their environment without sharing mutable provenance state."""
-    env = {"LLGM_ROOT_MODEL": "a"}
+    env = {"LLGM_MAIN_MODEL": "a"}
     first = Settings.from_env(environ=env)
-    env["LLGM_ROOT_MODEL"] = "b"
+    env["LLGM_MAIN_MODEL"] = "b"
     second = Settings.from_env(environ=env)
-    assert first.root_model == "a" and second.root_model == "b"
+    assert first.main_model == "a" and second.main_model == "b"
     with pytest.raises(TypeError):
-        first.field_sources["root_model"] = "altered"
+        first.field_sources["main_model"] = "altered"
 
 
 @pytest.mark.parametrize("process_environment", [False, True])
@@ -46,10 +46,10 @@ def test_application_settings_coexist_with_integration_and_repl_environment(
 ):
     """Separate environment namespaces cannot enter application values or diagnostics."""
     environment = {
-        "LLGM_ROOT_MODEL": "application-model",
+        "LLGM_MAIN_MODEL": "application-model",
         "LLGM_MAX_SEARCHES": "2",
         "LLGM_TEST_OPENAI": "0",
-        "LLGM_TEST_APPLICATION_ROOT_MODEL": "integration-model",
+        "LLGM_TEST_APPLICATION_MAIN_MODEL": "integration-model",
         "LLGM_TEST_LONGMEMEVAL_PATH": "/private/local-dataset.json",
         "LLGM_REPL_DOCKER_IMAGE": "trusted-image@sha256:fixture",
         "LLGM_REPL_HOST_SECRET": "private-repl-value",
@@ -63,9 +63,9 @@ def test_application_settings_coexist_with_integration_and_repl_environment(
         settings = Settings.from_env()
     else:
         settings = Settings.from_env(environ=environment)
-    assert settings.root_model == "application-model"
+    assert settings.main_model == "application-model"
     assert settings.max_searches == 2
-    assert settings.field_sources["root_model"] == "environment"
+    assert settings.field_sources["main_model"] == "environment"
     diagnostics = repr(settings.redacted()) + repr(settings)
     for name, value in environment.items():
         if name.startswith(("LLGM_TEST_", "LLGM_REPL_")):
@@ -89,7 +89,9 @@ def test_external_environment_names_are_not_application_file_or_override_fields(
     "env",
     [
         {"LLGM_MAX_SEARCHS": "4"},
-        {"LLGM_ROOT_MODLE": "typo"},
+        {"LLGM_GRAPH_PROVIDER": "unsupported"},
+        {"LLGM_MAX_GRAPH_CALLS": "0"},
+        {"LLGM_MAIN_MODLE": "typo"},
         {"LLGM_TESTING_MODE": "1"},
         {"LLGM_REPLICA_COUNT": "2"},
         {"LLGM_SEARCH_POLICY": "adaptive"},
@@ -113,7 +115,8 @@ def test_secrets_redacted_from_descriptor_and_repr():
             "LLGM_METADATA_BACKEND": "postgres",
             "LLGM_RETRIEVER_BACKEND": "postgres_fts",
             "LLGM_DATABASE_URL": "postgresql://user:SECRET@db/llgm?token=PRIVATE",
-            "LLGM_ROOT_BASE_URL": "https://u:SECRET@api.example/v1?key=PRIVATE",
+            "LLGM_MAIN_BASE_URL": "https://u:SECRET@api.example/v1?key=PRIVATE",
+            "LLGM_GRAPH_BASE_URL": "https://u:SECRET@maintenance.example/v1?key=PRIVATE",
         }
     )
     assert "SECRET" not in repr(settings)
@@ -174,3 +177,44 @@ def test_node_image_environment_setting_is_distinct_from_integration_namespace()
     assert settings.max_concurrency == 2
     assert settings.field_sources["node_repl_image"] == "environment"
     assert "separate-test-image" not in repr(settings.redacted())
+
+
+def test_maintenance_settings_are_independent_of_reader_settings():
+    """Environment model roles retain separate identities, credentials, and call limits."""
+    settings = Settings.from_env(
+        environ={
+            "LLGM_READER_MODEL": "reader",
+            "LLGM_GRAPH_MODEL": "organizer",
+            "LLGM_GRAPH_PROVIDER": "anthropic",
+            "LLGM_GRAPH_API_KEY_ENV": "ORGANIZER_KEY",
+            "LLGM_MAX_GRAPH_CALLS": "2",
+        }
+    )
+    assert settings.reader_model == "reader"
+    assert settings.graph_model == "organizer"
+    assert settings.graph_provider == "anthropic"
+    assert settings.graph_api_key_env == "ORGANIZER_KEY"
+    assert settings.max_graph_calls == 2
+    assert settings.field_sources["graph_model"] == "environment"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "root_model",
+        "sidecar_model",
+        "maintenance_model",
+        "max_sidecar_calls",
+        "max_maintenance_calls",
+    ],
+)
+def test_legacy_role_configuration_is_rejected_in_every_layer(tmp_path, name):
+    """Old names fail explicitly instead of coexisting with independent new model settings."""
+    with pytest.raises(ConfigurationError, match="Unknown LLGM setting"):
+        Settings.from_env(environ={"LLGM_" + name.upper(): "obsolete"})
+    with pytest.raises(ConfigurationError, match="Unknown LLGM setting"):
+        Settings.load(environ={}, overrides={name: "obsolete"})
+    config = tmp_path / "old.toml"
+    config.write_text(f'[llgm]\n{name} = "obsolete"\n')
+    with pytest.raises(ConfigurationError, match="Unknown LLGM setting"):
+        Settings.load(environ={}, config_file=config)

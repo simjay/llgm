@@ -21,7 +21,7 @@ from llgm.inference.budget import Budget, RunLedger, byte_token_bound
 from llgm.inference.repl import DockerREPL, DockerREPLConfig, REPLError, REPLTimeoutError
 from llgm.models import Message
 
-_PROTOCOL = "llgm-python-rlm-v1"
+_PROTOCOL = "llgm-python-rlm-v2"
 _SCHEMA = {
     "type": "object",
     "properties": {
@@ -149,11 +149,11 @@ class RLMResult:
 class RLMRuntime:
     """Compose hosted generation, isolated Python, and sequential recursive callbacks.
 
-    Root and child frames share model-call, sidecar-call, wall-time, and evidence
+    Main and child frames share model-call, reader-call, wall-time, and evidence
     allowances. ``max_steps`` bounds each frame. ``max_executions`` bounds Python
     submissions across the run. Evidence accounting conservatively sums printed
     observations, delegated prompts, and child returns, including repeated text.
-    The full root context stays external and is bounded by DockerREPLConfig.
+    The full main context stays external and is bounded by DockerREPLConfig.
 
     Clients remain caller-owned. One answer may run per instance. Cancellation
     propagates after container cleanup. ``last_trace`` and ``last_usage`` retain
@@ -162,8 +162,8 @@ class RLMRuntime:
 
     def __init__(
         self,
-        root_model,
-        child_model=None,
+        main_model,
+        reader_model=None,
         *,
         budget=None,
         repl_config=None,
@@ -189,8 +189,8 @@ class RLMRuntime:
             raise ConfigurationError("repl_config must be a DockerREPLConfig instance")
         if token_counter is not None and not callable(token_counter):
             raise ConfigurationError("token_counter must be callable")
-        self.root_model = root_model
-        self.child_model = root_model if child_model is None else child_model
+        self.main_model = main_model
+        self.reader_model = main_model if reader_model is None else reader_model
         self.budget = budget or Budget()
         self.repl_config = repl_config or DockerREPLConfig()
         self.max_depth, self.max_steps, self.max_executions = max_depth, max_steps, max_executions
@@ -215,8 +215,8 @@ class RLMRuntime:
             "paper_reproduction": False,
             "model_protocol": ["python", "finish"],
             "native_schema": "operation envelope when the model adapter supports structured output",
-            "root_context_sha256": _digest(encoded),
-            "root_context_bytes": len(encoded.encode("utf-8")),
+            "main_context_sha256": _digest(encoded),
+            "main_context_bytes": len(encoded.encode("utf-8")),
             "child_context": "only supplied llm_query prompt under context['prompt']",
             "evidence_accounting": "sum observations, delegated prompts, and child returns",
             "prompt_overflow": "fail; no implicit truncation or history compaction",
@@ -260,9 +260,9 @@ class _Execution:
     """Per-answer recursion state with a ledger shared by every interpreter and model."""
 
     def __init__(self, runtime):
-        """Initialize shared counters while reserving a final root model call."""
+        """Initialize shared counters while reserving a final main model call."""
         self.runtime = runtime
-        self.ledger = RunLedger(runtime.budget, runtime.token_counter, reserve_root=True)
+        self.ledger = RunLedger(runtime.budget, runtime.token_counter, reserve_main=True)
         self.invocations = 0
         self.executions = 0
         self.cleanup_failed = False
@@ -364,13 +364,13 @@ class _Execution:
                 "json_bytes": len(encoded.encode("utf-8")),
             },
         }
-        model = self.runtime.root_model if depth == 0 else self.runtime.child_model
+        model = self.runtime.main_model if depth == 0 else self.runtime.reader_model
         structured = bool(model.capabilities.structured_output)
         instructions = _INSTRUCTIONS
         if structured:
             instructions += '\nWrap your single operation in {"operation": <operation object>} as required by the response schema.\n'
         messages = [Message("system", instructions), Message("user", _json(metadata))]
-        role = "root" if depth == 0 else "sidecar"
+        role = "main" if depth == 0 else "reader"
         self.ledger.check_admission(messages, role, output_schema=_SCHEMA if structured else None)
         repl = DockerREPL(context, config=self.runtime.repl_config, llm_query=llm_query)
         failure = None

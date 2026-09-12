@@ -43,7 +43,7 @@ print(json.dumps({"answer": "".join(findings), "citations": citations, "unresolv
     return ModelResponse(json.dumps(operation))
 
 
-async def root_response(request):
+async def main_response(request):
     """Combine actual branch findings and their returned citation IDs in one final call."""
     payload = json.loads(request.messages[-1].content)
     operation = {
@@ -61,14 +61,15 @@ async def main():
         async with Workspace.open(directory) as workspace:
             memory = LLGM(
                 workspace,
-                CallableModelClient(root_response),
+                CallableModelClient(main_response),
                 CallableModelClient(node_response),
+                graph_model=None,
                 maintenance_policy=MaintenancePolicy(mode="disabled"),
                 max_seed_nodes=2,
                 max_concurrency=2,
                 inference_budget=Budget(
                     max_model_calls=12,
-                    max_sidecar_calls=10,
+                    max_reader_calls=10,
                     max_searches=4,
                     max_evidence_tokens=131072,
                     max_bundle_tokens=32768,
@@ -88,13 +89,13 @@ async def main():
                 outcome = await memory.ingest(
                     Conversation.from_turns(
                         [{"role": "user", "turn_id": "note", "text": text}],
+                        node_id=label,
                     )
                 )
                 sources[label] = outcome.source.node_id
             await workspace.publish_edge(
                 sources["database"],
                 sources["registry"],
-                relation="deployment_registry",
                 provenance=Provenance("user", "offline-example"),
             )
             start = texts["database"].index("PostgreSQL")
@@ -111,6 +112,7 @@ async def main():
             )
             result = await memory.answer(
                 "Production database, backups, and region",
+                remember=False,
                 scope={"env": "production"},
                 as_of_ms=parse_instant_ms("2026-09-11T00:00:00Z"),
             )
@@ -128,9 +130,9 @@ async def main():
                 and event["target_node_id"] == sources["registry"]
                 for event in result.trace
             )
-            assert sum(event["kind"] == "root_return" for event in result.trace) == 1
+            assert sum(event["kind"] == "main_return" for event in result.trace) == 1
             print(result.answer)
-            print("Two retrieved seeds, one recursive descendant, one final root call.")
+            print("Two retrieved seeds, one recursive descendant, one final main call.")
             print("Replacement citations are canonical. The original source remains readable.")
 
 

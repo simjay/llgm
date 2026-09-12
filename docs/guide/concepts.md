@@ -62,11 +62,13 @@ You later ask:
 
 > Which database does production use, and how long are backups kept?
 
-LLGM stores each conversation as a **source node**. A node contains the turns,
+LLGM keeps related discussion in a **topic node**. Several sessions can share
+a node. A node contains the turns,
 speaker roles and metadata, with an ID that identifies it in storage. The
 Database and Backups names here are labels for the example.
 
-Sources are **immutable**. Their original text stays unchanged after ingestion.
+Published turns are **immutable**. New turns append to the same topic while
+earlier text and source-span references stay unchanged.
 This matters when the team changes databases later. You can add the new decision
 and still recover the earlier statement, who made it, and the conversation
 around it.
@@ -81,8 +83,8 @@ LLGM uses the passage ranking to choose a few owning nodes as **seeds**. A seed
 is a starting point for investigation. For this question, Database and Backups
 would be useful seeds.
 
-A passage is the unit of search. A node is the unit of conversation storage and
-delegation. Searching passages helps find the relevant part of a long node
+A passage is the unit of search. A node is the unit of topic storage and delegation. Its size does not trigger
+automatic splitting. The RLM can inspect selected portions of a very long topic. Searching passages helps find the relevant part of a long node
 without sending the whole node to a model.
 
 ## Give each starting node a reader
@@ -102,13 +104,13 @@ treat context as something a program can inspect. Text can stay in interpreter
 variables until the delegate prints the portions it wants to consider. The
 model's **context** is its current input, including those printed observations,
 and still has a size limit. You configure the model used for local reading as the
-**sidecar model**.
+**reader model**.
 
 When a delegate reads text, LLGM retains a **source span** identifying the node,
 turn and character range it came from. That reference lets your application
 trace a quotation back to its original source.
 
-The **root model** receives the delegates' selected excerpts and findings, then
+The **main model** receives the delegates' selected excerpts and findings, then
 writes the final answer. The roles let you choose one model for repeated local
 reading and another for synthesis, or use the same model for both.
 
@@ -116,7 +118,8 @@ reading and another for synthesis, or use the same model for both.
 
 Now suppose the question also asks where production is hosted. An **edge** from
 Database to Registry records a relationship between those nodes. The edge has
-a direction and a relationship label, such as `related_to`.
+a direction, supporting evidence, and no relationship type. It records a connection.
+The RLM reader determines what the connection means for its question.
 
 The Database delegate can inspect that edge and ask a child delegate:
 
@@ -157,7 +160,7 @@ conversations remain in storage as well.
 
 ## Check the answer and its evidence
 
-With the correction recorded and both facts returned by delegates, the root
+With the correction recorded and both facts returned by delegates, the main model
 can answer:
 
 > Production uses MySQL and retains backups for seven days.
@@ -167,7 +170,7 @@ A reference tells you which stored text was cited. It does not by itself prove
 that the text supports the claim.
 
 Search can miss a useful conversation, a delegate can overlook a passage, and
-the root can draw the wrong conclusion. Read the result's status and evidence
+the main model can draw the wrong conclusion. Read the result's status and evidence
 alongside its answer. The [quickstart](quickstart.md#understand-the-result)
 shows how to do that in an application.
 

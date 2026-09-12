@@ -9,7 +9,7 @@
     "max_model_calls": 25,
     "max_output_tokens": 2048,
     "max_searches": 8,
-    "max_sidecar_calls": 24,
+    "max_reader_calls": 24,
     "timeout_seconds": 240
   },
   "case_ids": [
@@ -19,7 +19,7 @@
     "gpt4_59149c77",
     "0862e8bf_abs"
   ],
-  "claim": "Five-question LongMemEval development repair v6 with GPT-5.4 medium-reasoning root and GPT-4.1 delegates, not full-benchmark accuracy",
+  "claim": "Topic-node five-question exposed LongMemEval pilot",
   "dataset": {
     "case_count": 500,
     "path": "data/longmemeval/longmemeval_s_cleaned.json",
@@ -53,8 +53,9 @@
       "max_model_calls": 1,
       "max_output_tokens": 1024,
       "max_searches": 1,
-      "max_sidecar_calls": 1,
-      "timeout_seconds": 90
+      "max_reader_calls": 1,
+      "timeout_seconds": 90,
+      "max_graph_calls": 1
     },
     "max_candidates": 4,
     "max_context_chars": 8000,
@@ -64,16 +65,16 @@
   },
   "models": {
     "judge": "gpt-4o-2024-08-06",
-    "maintenance": "gpt-4.1-2025-04-14",
-    "root": "gpt-5.4-2026-03-05",
-    "sidecar": "gpt-4.1-2025-04-14"
+    "main": "gpt-5.4-2026-03-05",
+    "reader": "gpt-4.1-2025-04-14",
+    "graph": "gpt-4.1-2025-04-14"
   },
   "policy": {
-    "comparison": "LLGM-only development run. GPT-5.4 root with explicit medium reasoning and no temperature parameter, GPT-4.1 delegates and maintenance at temperature zero. Earlier BM25/full-context controls used GPT-4.1 final readers, so comparisons are unmatched and cannot isolate the architecture contribution. Relative to v5, the root prompt and evidence presentation are unchanged.",
+    "comparison": "Current topic construction has no hosted measurement. Earlier session-per-node measurements do not establish this behavior. Match models and budgets before architecture claims.",
     "cost": "Generation includes maintenance, query and unknown call liabilities. Judge costs separate. Token-based API estimates are not invoices. Local resources reported but unpriced, so equal total cost is unestablished.",
-    "execution": "Two cases concurrently. All five scheduled attempts retained, one attempt per question with no answer retries. Shared 400000-token generation pacing window and separate judge window. Stop after 16 unknown-usage calls or earlier dollar/time admission limit. Full 500-question execution remains stopped at user request.",
-    "exposure": "The five questions and their failure traces have been inspected during development. This is an exposed diagnostic gate, not an independent accuracy estimate. Preserve every earlier candidate and root-only replay. Gold answers and evaluator labels never enter generation.",
-    "preparation": "Fresh isolated full history for each case/arm, ordinary ingestion and per-source automatic maintenance for LLGM. No manually supplied edges or patches. No query or gold during construction. Supplied session order and date text preserved. No shared-history merging or speculative amortization.",
+    "execution": "All scheduled attempts retained with no answer retries. Existing generation and judge allowances remain admission limits. Full benchmark execution is separate explicit work.",
+    "exposure": "The five questions and their failure traces have been inspected during development. This is an exposed diagnostic gate, not an independent accuracy estimate. Preserve every earlier candidate and synthesis replay. Gold answers and evaluator labels never enter generation.",
+    "preparation": "Fresh isolated history per case and arm. LLGM imports supplied sessions through conservative topic routing with immutable per-turn attribution and generic connections. No question or gold during construction. Query uses remember=False. Baselines import original sessions without model organization.",
     "selection": "First question in supplied dataset order for each of single-session-user, multi-session, knowledge-update, temporal-reasoning and abstention. Selected by category and order, not by generated answers. Five questions only. This is exposed development data, not a representative accuracy estimate.",
     "target": "Five percentage points over strongest reproduced framework at no higher total cost remains the goal. These initial control arms alone do not compare Mem0 or Graphiti."
   },
@@ -85,21 +86,21 @@
       "usd_per_million_input_tokens": 2.5,
       "usd_per_million_output_tokens": 10
     },
-    "maintenance": {
-      "retrieved_date": "2026-09-11",
-      "source": "https://developers.openai.com/api/docs/models/gpt-4.1",
-      "usd_per_million_cached_input_tokens": 0.5,
-      "usd_per_million_input_tokens": 2,
-      "usd_per_million_output_tokens": 8
-    },
-    "root": {
+    "main": {
       "retrieved_date": "2026-09-11",
       "source": "https://developers.openai.com/api/docs/models/gpt-5.4",
       "usd_per_million_cached_input_tokens": 0.25,
       "usd_per_million_input_tokens": 2.5,
       "usd_per_million_output_tokens": 15
     },
-    "sidecar": {
+    "reader": {
+      "retrieved_date": "2026-09-11",
+      "source": "https://developers.openai.com/api/docs/models/gpt-4.1",
+      "usd_per_million_cached_input_tokens": 0.5,
+      "usd_per_million_input_tokens": 2,
+      "usd_per_million_output_tokens": 8
+    },
+    "graph": {
       "retrieved_date": "2026-09-11",
       "source": "https://developers.openai.com/api/docs/models/gpt-4.1",
       "usd_per_million_cached_input_tokens": 0.5,
@@ -114,7 +115,7 @@
     "retrieval_k": 40
   },
   "repetitions": 1,
-  "root_reasoning_effort": "medium",
+  "main_reasoning_effort": "medium",
   "runtime": {
     "max_concurrency": 3,
     "max_depth": 3,
@@ -125,5 +126,5 @@
     "passage_chars": 2048,
     "retrieval_k": 40
   },
-  "schema_version": 1
+  "schema_version": 2
 }

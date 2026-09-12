@@ -27,6 +27,12 @@ def _parser():
     )
     ask.add_argument("--workspace", type=Path)
     ask.add_argument(
+        "--conversation-id", default="default", help="Resume a persistent conversation"
+    )
+    ask.add_argument(
+        "--read-only", action="store_true", help="Query memory without saving chat turns"
+    )
+    ask.add_argument(
         "--node-id", help="Use one explicit starting node instead of initial retrieval"
     )
     ask.add_argument("--scope", default="{}", help="JSON object selecting evidence applicability")
@@ -62,6 +68,8 @@ async def _ask(args) -> tuple[dict, int]:
     async with LLGM.from_settings(settings) as application:
         response = await application.answer(
             args.question,
+            remember=not args.read_only,
+            conversation_id=args.conversation_id,
             node_id=args.node_id,
             scope=scope,
             as_of_ms=args.as_of_ms,

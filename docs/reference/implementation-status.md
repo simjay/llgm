@@ -18,24 +18,34 @@ where an application still needs its own decisions or checks.
 | Primary graph | Directed edges retain provenance, applicability, and withdrawal state. Delegates can inspect relationships and investigate their targets. |
 | Journals and corrections | Explicit journal writes retain history and can change effective reads. Original and replacement references remain available. Maintenance does not generate these corrections automatically. |
 | Time | Sources can carry event timestamps. Queries and amendments accept numeric validity instants with explicit timezone conversion. |
-| Initial node selection | Ranked passages select the first distinct node owners, up to the configured cap. A supplied `node_id` bypasses initial search. See [node search](../guide/node-search.md). |
-| Node inference | Concurrent branches use isolated Docker Python, lazy source reads, recursive children, and selected citation returns. The root combines their evidence in one final call. |
+| Initial node selection | Ranked passages select the first distinct node owners, up to the configured cap. Conversation answers include the active topic. A supplied `node_id` in read-only mode bypasses initial search. See [node search](../guide/node-search.md). |
+| Node inference | Concurrent branches use isolated Docker Python, lazy source reads, recursive children, and selected citation returns. The main model combines their evidence in one final call. |
 | Answer outcomes | Results include status, references, usage, and unresolved needs. Failed or skipped work remains visible even when another branch supplies an answer. |
 | Local retrieval | A reusable incremental SQLite FTS5 index covers source and inline-journal passages. |
 | Retrieval adapters | BM25, dense cosine, hybrid fusion, and optional official ColBERTv2/PLAID adapters. A custom source retriever requires an evidence factory and valid workspace references. |
 | Model adapters | Native OpenAI, Anthropic, and OpenAI-compatible endpoints support complete-response generation. Each role can use a separately configured model. |
 | Storage | Local blobs and SQLite metadata are the default. An optional S3 blob adapter is available. Metadata remains local SQLite. |
 | Resource limits | One answer shares its call, search, evidence, context, operation and time allowances. Recursion depth and per-node steps are also bounded. Maintenance has a separate budget. |
-| Existing workspaces | Metadata schema 3 is supported. A local schema-2 workspace can be explicitly copied after classifying its journal pointers. |
+| Existing workspaces | Metadata schema 5 is supported. Schema 4 requires rebuilding from inputs. Copy schema 3 explicitly. Schema 2 additionally requires classifying its journal pointers. |
+
+## Conversation management
+
+`answer()` stores new user turns and nonempty replies, with a persistent
+conversation ID and conservative model topic routing. Related history appends
+to the same topic without a size threshold. `ingest()` imports earlier batches
+through the same routing policy. It does not split inside a batch. Topic
+classification quality and hosted reasoning on gigantic nodes remain unmeasured.
+`remember=False` preserves the read-only answer contract. The interface is text
+only and does not implement streaming, tool calling or response replay.
 
 ## Answer quality and citations
 
 A successful API call or `completed` answer does not guarantee factual accuracy.
 A delegate can miss a relevant passage, omit a useful fact, or repeat work.
-The root can misinterpret returned evidence. A compatible provider interface
+The main model can misinterpret returned evidence. A compatible provider interface
 alone does not establish that a model can reliably perform these tasks.
 
-The root receives the selected original excerpts before branch summaries.
+The main model receives the selected original excerpts before branch summaries.
 Citation validation restricts its references to evidence actually returned by
 those branches. This establishes the cited source's identity, not whether it
 supports every claim in the answer. Review representative questions from your
@@ -49,9 +59,9 @@ and [troubleshooting evidence loss](../guide/node-search.md#diagnose-missing-evi
 
 ## Storage and scale
 
-Large source text is exposed to models through selected spans. The current JSON
-blob adapter still loads each owning source in host memory. It does not stream
-an arbitrarily large source from storage.
+Large source text is exposed to models through selected spans. Appended topics load one immutable turn for a source span. Turn-coordinate
+pages do not load appended text. Explicit imports and legacy base blobs still
+load their whole source. A single giant turn is not streamed.
 
 Operational journals have finite byte limits. Redundant entries compact without
 deleting history, and necessary entries that exceed the limit cause an explicit

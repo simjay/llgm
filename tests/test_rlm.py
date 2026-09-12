@@ -109,15 +109,15 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
     async def test_external_context_is_not_initial_model_context(self):
         """A source is exposed only through interpreter observations, not initial prompts."""
         source = "private evidence value 7392"
-        root = model(python("print(context['document'])"), finish("7392"), name="root-v1")
+        main = model(python("print(context['document'])"), finish("7392"), name="main-v1")
         factory = REPLFactory([source])
         with patch("llgm.inference.rlm.DockerREPL", factory):
-            runtime = RLMRuntime(root)
+            runtime = RLMRuntime(main)
             actual = await runtime.answer("What is the value?", context={"document": source})
         self.assertEqual(actual.status, "completed")
         self.assertEqual(actual.answer, "7392")
-        self.assertNotIn(source, str(root.requests[0].messages))
-        self.assertIn(source, root.requests[1].messages[-1].content)
+        self.assertNotIn(source, str(main.requests[0].messages))
+        self.assertIn(source, main.requests[1].messages[-1].content)
         self.assertEqual(factory.sessions[0].context, {"document": source})
         self.assertEqual(factory.sessions[0].code, ["print(context['document'])"])
         self.assertEqual(actual.usage["python_executions"], 1)
@@ -126,11 +126,11 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(actual.provenance["paper_reproduction"])
         self.assertEqual(factory.closed, [0])
 
-    async def test_root_child_grandchild_share_budget_and_keep_independent_contexts(self):
+    async def test_main_child_grandchild_share_budget_and_keep_independent_contexts(self):
         """Recursive Python callbacks run child model loops and resume both ancestors."""
 
-        async def root_relay(repl):
-            """Delegate selected text without copying the root's other context keys."""
+        async def main_relay(repl):
+            """Delegate selected text without copying the main's other context keys."""
             answer = await repl.callback("Find the value in selected evidence")
             return REPLResult(answer, None, False, 1)
 
@@ -139,7 +139,7 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
             answer = await repl.callback("Find grandchild value 917")
             return REPLResult(answer, None, False, 1)
 
-        root = model(python("relay_root"), finish("917"), name="root-v1", usage=Usage(10, 2))
+        main = model(python("relay_main"), finish("917"), name="main-v1", usage=Usage(10, 2))
         child = model(
             python("inspect_prompt"),
             python("relay_child"),
@@ -149,17 +149,17 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
             name="child-v2",
             usage=Usage(7, 1),
         )
-        factory = REPLFactory([root_relay], ["task inspected", child_relay], ["917"])
+        factory = REPLFactory([main_relay], ["task inspected", child_relay], ["917"])
         with patch("llgm.inference.rlm.DockerREPL", factory):
             runtime = RLMRuntime(
-                root,
+                main,
                 child,
                 budget=Budget(max_model_calls=10, max_context_tokens=32000),
             )
-            actual = await runtime.answer("Find value", context={"unshared": "root-only-secret"})
+            actual = await runtime.answer("Find value", context={"unshared": "main-only-secret"})
         self.assertEqual(actual.status, "completed", actual.unresolved)
         self.assertEqual(actual.usage["model_calls"], 7)
-        self.assertEqual(actual.usage["sidecar_calls"], 5)
+        self.assertEqual(actual.usage["reader_calls"], 5)
         self.assertEqual(actual.usage["known_input_tokens"], 55)
         self.assertEqual(actual.usage["known_output_tokens"], 9)
         self.assertEqual(actual.usage["recursive_invocations"], 2)
@@ -168,13 +168,13 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
             factory.sessions[1].context, {"prompt": "Find the value in selected evidence"}
         )
         self.assertEqual(factory.sessions[2].context, {"prompt": "Find grandchild value 917"})
-        self.assertNotIn("root-only-secret", str(child.requests))
+        self.assertNotIn("main-only-secret", str(child.requests))
         self.assertEqual(factory.closed, [2, 1, 0])
         calls = [event for event in actual.trace if event["kind"] == "model"]
         self.assertEqual([event["depth"] for event in calls], [0, 1, 1, 2, 2, 1, 0])
         self.assertEqual(
             [event["model"] for event in calls],
-            ["root-v1", "child-v2", "child-v2", "child-v2", "child-v2", "child-v2", "root-v1"],
+            ["main-v1", "child-v2", "child-v2", "child-v2", "child-v2", "child-v2", "main-v1"],
         )
         transfers = [event for event in actual.trace if "accounting_units" in event]
         self.assertEqual(
@@ -191,12 +191,12 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
             """Expose a recoverable Python exception with explicit output truncation."""
             return REPLResult("prefix", "NameError: missing", True, 0)
 
-        root = model(python("bad_name"), python("corrected"), finish("fixed"))
+        main = model(python("bad_name"), python("corrected"), finish("fixed"))
         factory = REPLFactory([error, "recovered"])
         with patch("llgm.inference.rlm.DockerREPL", factory):
-            actual = await RLMRuntime(root, capture_text=True).answer("Fix", context={})
+            actual = await RLMRuntime(main, capture_text=True).answer("Fix", context={})
         self.assertEqual(actual.status, "completed")
-        observation = json.loads(root.requests[1].messages[-1].content)
+        observation = json.loads(main.requests[1].messages[-1].content)
         self.assertEqual(observation["error"], "NameError: missing")
         self.assertTrue(observation["stdout_truncated"])
         self.assertEqual(factory.sessions[0].code, ["bad_name", "corrected"])
@@ -242,12 +242,12 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
         for context in cases:
             with self.subTest(context=type(context)):
                 factory = REPLFactory()
-                root = model(finish("unused"))
+                main = model(finish("unused"))
                 with patch("llgm.inference.rlm.DockerREPL", factory):
                     with self.assertRaises(ConfigurationError):
-                        await RLMRuntime(root).answer("Question", context=context)
+                        await RLMRuntime(main).answer("Question", context=context)
                 self.assertFalse(factory.sessions)
-                self.assertFalse(root.requests)
+                self.assertFalse(main.requests)
         for kwargs in (
             {"max_depth": -1},
             {"max_steps": 0},
@@ -288,11 +288,11 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
             {"token_counter": lambda text: True},
         ):
             factory = REPLFactory()
-            root = model(finish("unused"))
+            main = model(finish("unused"))
             with patch("llgm.inference.rlm.DockerREPL", factory):
-                actual = await RLMRuntime(root, **kwargs).answer("Question", context={})
+                actual = await RLMRuntime(main, **kwargs).answer("Question", context={})
             self.assertNotEqual(actual.status, "completed")
-            self.assertFalse(root.requests)
+            self.assertFalse(main.requests)
             self.assertFalse(factory.sessions)
 
     async def test_depth_and_global_call_budget_prevent_child_startup(self):
@@ -325,19 +325,19 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
 
         for plan in ([relay], ["x" * 100]):
             factory = REPLFactory(plan)
-            root = model(python("inspect"), finish("unused"))
+            main = model(python("inspect"), finish("unused"))
             with patch("llgm.inference.rlm.DockerREPL", factory):
-                actual = await RLMRuntime(root, budget=Budget(max_evidence_tokens=50)).answer(
+                actual = await RLMRuntime(main, budget=Budget(max_evidence_tokens=50)).answer(
                     "Question",
                     context={},
                 )
             self.assertEqual(actual.status, "budget_exhausted")
-            self.assertEqual(len(root.requests), 1)
+            self.assertEqual(len(main.requests), 1)
             self.assertEqual(len(factory.sessions), 1)
             self.assertEqual(actual.usage["evidence_accounting_units"], 0)
 
-    async def test_sidecar_limit_spans_sibling_callbacks_before_container_start(self):
-        """A completed child cannot reset the shared sidecar allowance for its sibling."""
+    async def test_reader_limit_spans_sibling_callbacks_before_container_start(self):
+        """A completed child cannot reset the shared reader allowance for its sibling."""
 
         async def siblings(repl):
             """Attempt two sequential children under a one-child-model-call allowance."""
@@ -351,12 +351,12 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
             actual = await RLMRuntime(
                 model(python("two_callbacks")),
                 child,
-                budget=Budget(max_sidecar_calls=1),
+                budget=Budget(max_reader_calls=1),
             ).answer("Question", context={})
         self.assertEqual(actual.status, "budget_exhausted")
         self.assertEqual(len(factory.sessions), 2)
         self.assertEqual(len(child.requests), 1)
-        self.assertEqual(actual.usage["sidecar_calls"], 1)
+        self.assertEqual(actual.usage["reader_calls"], 1)
         self.assertEqual(factory.closed, [1, 0])
 
     async def test_returned_answer_steps_and_python_work_have_separate_limits(self):
@@ -413,7 +413,7 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_refusal_preserves_billed_usage_but_never_executes_text(self):
         """Refused model output remains a failure even when it resembles valid Python JSON."""
-        root = ScriptedModelClient(
+        main = ScriptedModelClient(
             [
                 ModelResponse(
                     json.dumps(python("must_not_execute")),
@@ -425,7 +425,7 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
         )
         factory = REPLFactory()
         with patch("llgm.inference.rlm.DockerREPL", factory):
-            actual = await RLMRuntime(root).answer("Question", context={})
+            actual = await RLMRuntime(main).answer("Question", context={})
         self.assertEqual(actual.status, "failed")
         self.assertEqual(actual.usage["known_input_tokens"], 4)
         self.assertEqual(factory.sessions[0].code, [])
@@ -433,11 +433,11 @@ class RLMTests(unittest.IsolatedAsyncioTestCase):
     async def test_docker_failure_precedes_model_call_and_has_no_host_fallback(self):
         """Missing isolation infrastructure fails explicitly before provider work."""
         factory = REPLFactory(start_error=REPLError("Docker unavailable"))
-        root = model(finish("unused"))
+        main = model(finish("unused"))
         with patch("llgm.inference.rlm.DockerREPL", factory):
-            actual = await RLMRuntime(root).answer("Question", context={})
+            actual = await RLMRuntime(main).answer("Question", context={})
         self.assertEqual(actual.status, "failed")
-        self.assertFalse(root.requests)
+        self.assertFalse(main.requests)
         self.assertEqual(factory.closed, [0])
 
     async def test_interpreter_and_whole_run_timeouts_are_explicit_budget_failures(self):
@@ -573,13 +573,13 @@ class RLMCleanupLifetimeTests(unittest.IsolatedAsyncioTestCase):
             repl.closed = True
 
         factory = REPLFactory([relay])
-        root = model(python("delegate"), finish("must not complete"))
+        main = model(python("delegate"), finish("must not complete"))
         child = model(finish("child answer"))
         with (
             patch("llgm.inference.rlm.DockerREPL", factory),
             patch.object(FakeREPL, "aclose", close),
         ):
-            runtime = RLMRuntime(root, child)
+            runtime = RLMRuntime(main, child)
             result = await runtime.answer("Question", context={})
 
         self.assertEqual(result.status, "failed")
@@ -587,7 +587,7 @@ class RLMCleanupLifetimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("cleanup failed", result.unresolved[0])
         self.assertTrue(all(reply["error"] is not None for reply in replies))
         self.assertEqual(len(factory.sessions), 2)
-        self.assertEqual(len(root.requests), 1)
+        self.assertEqual(len(main.requests), 1)
         self.assertEqual(len(child.requests), 1)
         self.assertEqual(result.usage["model_calls"], 2)
         self.assertEqual(factory.closed, [1, 0])

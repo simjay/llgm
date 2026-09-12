@@ -12,7 +12,7 @@ not a second specification of every method.
 | --- | --- | --- |
 | Application construction, ingestion and seed selection | [llgm.py](../src/llgm/llgm.py) | [Application](../tests/test_application.py), [entry point](../tests/test_application_entrypoint.py) |
 | Records, references, settings and time selectors | [core](../src/llgm/core) | [Storage](../tests/test_storage.py), [settings](../tests/test_config.py), [environment files](../tests/test_env_file.py) |
-| Source publication, edges and operational journals | [workspace.py](../src/llgm/memory/workspace.py) | [Storage](../tests/test_storage.py), [edges](../tests/test_edges.py), [journal compaction](../tests/test_journal_compaction.py) |
+| Topic append storage, source publication, edges and operational journals | [workspace.py](../src/llgm/memory/workspace.py) | [Storage](../tests/test_storage.py), [edges](../tests/test_edges.py), [journal compaction](../tests/test_journal_compaction.py) |
 | Raw evidence, amendments and query scope | [evidence.py](../src/llgm/memory/evidence.py), [query.py](../src/llgm/memory/query.py) | [Evidence](../tests/test_evidence.py), [effective reads](../tests/test_effective_reads.py) |
 | Relationship proposals and maintenance policy | [maintenance.py](../src/llgm/memory/maintenance.py) | [Application](../tests/test_application.py) |
 | Blob storage, local indexing and explicit migration | [storage](../src/llgm/storage), [migration.py](../src/llgm/memory/migration.py) | [Storage](../tests/test_storage.py), [index](../tests/test_lexical_index.py), [migration](../tests/test_storage_migration.py) |
@@ -44,12 +44,14 @@ not a second specification of every method.
 
 ## Preserve the execution boundary
 
-- `LLGM` is the application entry point. Initial retrieval chooses distinct seed
-  owners before delegate generation. An explicit `node_id` supplies the sole seed.
+- `LLGM.answer()` owns conversation persistence and conservative topic routing.
+  `memory/topics.py` makes bounded routing decisions. `memory/conversation.py`
+  appends immutable turns. Initial reading includes the active topic.
+  Read-only answers select distinct retrieval owners, or an explicit node ID.
 - Schedule every admitted seed with bounded concurrency. Children use isolated
   interpreters and working contexts, while sharing budgets and citation tracking.
   Global search remains possible, so a node delegate is not an access boundary.
-- Only delivered, selected evidence reaches the final root call. The root has
+- Only delivered, selected evidence reaches the final main call. The main has
   no further query phase. Keep skipped seeds and required failure reports visible
   in the result even when the model omits them from its answer text.
 - Reserve finalization capacity within the shared budget. Preserve available

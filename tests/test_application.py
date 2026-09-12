@@ -42,15 +42,13 @@ def operation(name, **fields):
     return json.dumps({"op": name, **fields})
 
 
-def proposer(*, relation="related_to", usage=Usage(20, 10), invalid=False):
+def proposer(*, relation=None, usage=Usage(20, 10), invalid=False):
     """Propose links only from the exact endpoint spans presented by maintenance."""
 
     async def complete(request):
         """Build structurally valid fixture proposals without access to Workspace internals."""
         if invalid:
-            return ModelResponse(
-                '{"links":"invalid"}', usage, provider="fixture", model="maintenance"
-            )
+            return ModelResponse('{"links":"invalid"}', usage, provider="fixture", model="graph")
         payload = json.loads(request.messages[-1].content)
         source = payload["source_node_id"]
         passages = payload["passages"]
@@ -63,16 +61,14 @@ def proposer(*, relation="related_to", usage=Usage(20, 10), invalid=False):
             links.append(
                 {
                     "target_node_id": candidate,
-                    "relation": relation,
+                    **({"relation": relation} if relation is not None else {}),
                     "supporting_references": [source_passage["reference"], target["reference"]],
                     "rationale": "Both fixture passages describe Orion.",
                 }
             )
-        return ModelResponse(
-            json.dumps({"links": links}), usage, provider="fixture", model="maintenance"
-        )
+        return ModelResponse(json.dumps({"links": links}), usage, provider="fixture", model="graph")
 
-    return CallableModelClient(complete, provider="fixture", model="maintenance")
+    return CallableModelClient(complete, provider="fixture", model="graph")
 
 
 class ApplicationTests(unittest.IsolatedAsyncioTestCase):
@@ -89,19 +85,19 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         await self.workspace.close()
         self.temp.cleanup()
 
-    def app(self, *, root=None, sidecar=None, maintenance=None, policy=None, **kwargs):
+    def app(self, *, main=None, reader=None, graph=None, policy=None, **kwargs):
         """Construct an application with deterministic clients and generous local accounting limits."""
         models = Models()
         kwargs.setdefault("repl_factory", ReplayFactory())
         return LLGM(
             self.workspace,
-            root or models.root,
-            sidecar or models.sidecar,
-            maintenance_model=maintenance or proposer(),
+            main or models.main,
+            reader or models.reader,
+            graph_model=graph or proposer(),
             maintenance_policy=policy,
             inference_budget=Budget(
                 max_model_calls=12,
-                max_sidecar_calls=10,
+                max_reader_calls=10,
                 max_context_tokens=64000,
                 max_bundle_tokens=16000,
             ),
@@ -126,13 +122,13 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             conversation("b", "Orion uses the registry for production deployments.")
         )
         self.assertEqual(second.maintenance.status, "completed")
-        self.assertEqual(second.maintenance.usage["maintenance_calls"], 1)
+        self.assertEqual(second.maintenance.usage["graph_calls"], 1)
         self.assertEqual(second.maintenance.usage["known_input_tokens"], 20)
         self.assertEqual(second.maintenance.usage["known_output_tokens"], 10)
         self.assertIsNone(second.maintenance.usage["currency_cost"])
         self.assertEqual([entry.target_node_id for entry in second.maintenance.accepted], ["a"])
         entry = second.maintenance.accepted[0]
-        self.assertEqual(entry.provenance.model, "maintenance")
+        self.assertEqual(entry.provenance.model, "graph")
         self.assertEqual(
             {ref.node_id for ref in entry.provenance.supporting_references}, {"a", "b"}
         )
@@ -198,7 +194,6 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                         "links": [
                             {
                                 "target_node_id": "registry",
-                                "relation": "related_to",
                                 "supporting_references": [
                                     source["reference"],
                                     matched["reference"],
@@ -210,11 +205,11 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 Usage(30, 15),
                 provider="fixture",
-                model="maintenance",
+                model="graph",
             )
 
         app = self.app(
-            maintenance=CallableModelClient(link_from_presented_evidence),
+            graph=CallableModelClient(link_from_presented_evidence),
             policy=MaintenancePolicy(max_context_chars=1024),
             passage_chars=256,
         )
@@ -245,7 +240,6 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             proposal = LinkProposal(
                 NodeRef("a"),
                 NodeRef("b"),
-                "related_to",
                 (SourceSpan("a", "t", 0, 12), SourceSpan("b", "t", 0, 12)),
                 "Shared Orion context",
                 "fixture",
@@ -270,28 +264,28 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(review.decisions[0]["decision"], "review_required")
         self.assertEqual(len(review.proposals), 1)
         self.assertFalse(review.accepted)
-        rejected = await self.app(maintenance=proposer(relation="suggests")).organize(["a"])
-        self.assertEqual(rejected.decisions[0]["decision"], "relation_not_allowed")
+        rejected = await self.app(graph=proposer(relation="suggests")).organize(["a"])
+        self.assertEqual(rejected.error_type, "SchemaError")
+        self.assertFalse(rejected.accepted)
         self.assertEqual(await self.workspace.inspect_journal("a"), [])
 
-    async def test_maintenance_model_receives_the_configured_relation_vocabulary(self):
-        """Automatic proposals are asked to use the same relation vocabulary publication enforces."""
+    async def test_graph_model_proposes_untyped_connections(self):
+        """Automatic proposals and published connections have no relationship category."""
         await self.seed(("a", "Orion origin"), ("b", "Orion target"))
         requests = []
-        underlying = proposer(relation="related_to")
+        underlying = proposer()
 
         async def observing(request):
             """Retain the actual proposal request before producing a structurally valid fixture response."""
             requests.append(request)
             return await underlying.complete(request)
 
-        policy = MaintenancePolicy(allowed_relations=("related_to",))
-        result = await self.app(maintenance=CallableModelClient(observing), policy=policy).organize(
-            ["a"]
-        )
+        policy = MaintenancePolicy()
+        result = await self.app(graph=CallableModelClient(observing), policy=policy).organize(["a"])
         self.assertEqual(result.status, "completed")
-        self.assertEqual([entry.relation for entry in result.accepted], ["related_to"])
-        self.assertIn(json.dumps(policy.allowed_relations), requests[0].messages[0].content)
+        self.assertEqual(len(result.accepted), 1)
+        self.assertFalse(hasattr(result.accepted[0], "relation"))
+        self.assertIn("generic connections", requests[0].messages[0].content)
         self.assertEqual(json.loads(requests[0].messages[-1].content)["source_node_id"], "a")
 
     async def test_maintenance_native_schema_reaches_sdk_and_host_still_checks_references(self):
@@ -301,14 +295,13 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             {"type": "source_span", "node_id": node_id, "turn_id": "t", "start": 0, "end": 12}
             for node_id in ("a", "b")
         ]
-        policy = MaintenancePolicy(allowed_relations=("related_to",))
+        policy = MaintenancePolicy()
         for wrapped in (False, True):
             with self.subTest(wrapped=wrapped):
                 payload = {
                     "links": [
                         {
                             "target_node_id": "b",
-                            "relation": "related_to",
                             "supporting_references": [
                                 {"reference": ref, "text": "Orion passage", "metadata": {}}
                                 if wrapped
@@ -322,7 +315,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 sdk = FakeSDK(
                     NS(
                         id="maintenance-response",
-                        model="maintenance-model",
+                        model="graph-model",
                         status="completed",
                         usage=NS(input_tokens=20, output_tokens=10),
                         output=[
@@ -333,8 +326,8 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                         ],
                     )
                 )
-                async with OpenAIModelClient("maintenance-model", client=sdk) as model:
-                    result = await self.app(maintenance=model, policy=policy).organize(["a"])
+                async with OpenAIModelClient("graph-model", client=sdk) as model:
+                    result = await self.app(graph=model, policy=policy).organize(["a"])
                 self.assertEqual(len(sdk.requests), 1)
                 request = sdk.requests[0]
                 native = request["text"]["format"]
@@ -342,7 +335,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 link = native["schema"]["properties"]["links"]["items"]
                 self.assertEqual(
                     set(link["required"]),
-                    {"target_node_id", "relation", "supporting_references", "rationale"},
+                    {"target_node_id", "supporting_references", "rationale"},
                 )
                 refs = link["properties"]["supporting_references"]["items"]["anyOf"]
                 self.assertEqual(
@@ -355,7 +348,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn("text", ref["properties"])
                     self.assertNotIn("reference", ref["properties"])
                 self.assertIn("copy only the value", request["input"][0]["content"])
-                self.assertIn(json.dumps(policy.allowed_relations), request["input"][0]["content"])
+                self.assertNotIn("relation", link["properties"])
                 self.assertEqual(request["max_output_tokens"], policy.budget.max_output_tokens)
                 self.assertTrue(result.trace[0]["structured_output"])
                 self.assertEqual(result.usage["model_calls"], 1)
@@ -366,7 +359,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     self.assertEqual(len(result.accepted), 1)
                     self.assertEqual(
-                        result.accepted[0].provenance.prompt_version, "link-proposal-v4"
+                        result.accepted[0].provenance.prompt_version, "link-proposal-v6"
                     )
 
     async def test_node_link_and_model_call_limits_preserve_partial_work(self):
@@ -388,7 +381,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_proposal_keeps_ingested_source_and_usage(self):
         """Malformed model output fails maintenance without rolling back durable ingestion."""
         await self.seed(("a", "Orion origin"))
-        app = self.app(maintenance=proposer(invalid=True))
+        app = self.app(graph=proposer(invalid=True))
         result = await app.ingest(conversation("b", "Orion target"))
         self.assertTrue(result.source.created)
         self.assertEqual(result.maintenance.status, "failed")
@@ -398,7 +391,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.workspace.inspect_journal("b"), [])
 
     async def test_maintenance_evidence_budget_prevents_provider_admission(self):
-        """Source evidence cannot reach maintenance models after its declared allowance is exhausted."""
+        """Source evidence cannot reach graph models after its declared allowance is exhausted."""
         await self.seed(("a", "Orion origin"))
         policy = MaintenancePolicy(
             budget=replace(MaintenancePolicy().budget, max_evidence_tokens=1)
@@ -422,7 +415,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         policy = MaintenancePolicy(
             budget=replace(MaintenancePolicy().budget, max_evidence_tokens=2000)
         )
-        result = await self.app(maintenance=client, policy=policy).ingest(
+        result = await self.app(graph=client, policy=policy).ingest(
             conversation("b", "Orion target region."),
         )
         self.assertEqual(result.maintenance.status, "budget_exhausted")
@@ -463,7 +456,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             return handle
 
         with patch("llgm.llgm.Evidence.open", side_effect=track):
-            result = await self.app(maintenance=CallableModelClient(fail)).organize(["a"])
+            result = await self.app(graph=CallableModelClient(fail)).organize(["a"])
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.usage["unknown_usage_calls"], 1)
         self.assertEqual(result.trace[0]["status"], "failed")
@@ -481,7 +474,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.Event().wait()
 
         await self.seed(("a", "Orion origin"))
-        app = self.app(maintenance=CallableModelClient(wait))
+        app = self.app(graph=CallableModelClient(wait))
         task = asyncio.create_task(app.ingest(conversation("b", "Orion target")))
         await started.wait()
         task.cancel()
@@ -492,10 +485,10 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(app.last_maintenance.trace[0]["status"], "cancelled")
         self.assertIn("Orion target", (await self.workspace.resolve(NodeRef("b"))).text)
 
-    async def test_initial_retrieval_deduplicates_seeds_then_root_receives_branch_returns(self):
-        """An ordinary question triggers retrieval before any delegate and one final root call."""
+    async def test_initial_retrieval_deduplicates_seeds_then_main_receives_branch_returns(self):
+        """An ordinary question triggers retrieval before any delegate and one final main call."""
         models = Models()
-        app = self.app(root=models.root, sidecar=models.sidecar)
+        app = self.app(main=models.main, reader=models.reader)
         await app.ingest(
             conversation("release", "Orion rollout date is 2031-04-07."), organize=False
         )
@@ -507,10 +500,10 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         selection = next(event for event in result.trace if event["kind"] == "seed_selection")
         self.assertEqual(selection["selected"], ["release"])
         self.assertEqual(result.usage["searches"], 1)
-        self.assertEqual(len(models.root_requests), 1)
-        payload = json.loads(models.root_requests[0].messages[1].content)
+        self.assertEqual(len(models.main_requests), 1)
+        payload = json.loads(models.main_requests[0].messages[1].content)
         self.assertEqual([branch["node_id"] for branch in payload["branches"]], ["release"])
-        self.assertNotIn("hidden sentinel", str(models.root_requests) + str(models.child_requests))
+        self.assertNotIn("hidden sentinel", str(models.main_requests) + str(models.child_requests))
         self.assertNotIn("2031-04-07", models.child_requests[0].messages[1].content)
         self.assertEqual({ref.node_id for ref in result.references}, {"release"})
 
@@ -530,7 +523,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 observations.append(json.loads(json.loads(request.messages[-1].content)["stdout"]))
             return await original(request)
 
-        app = self.app(root=models.root, sidecar=CallableModelClient(reading_model))
+        app = self.app(main=models.main, reader=CallableModelClient(reading_model))
         await app.ingest(conversation("a", "Orion color is cobalt."), organize=False)
         task = asyncio.create_task(app.answer("Orion color", remember=False))
         await asyncio.wait_for(started.wait(), 1)
@@ -561,7 +554,6 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         edge = await self.workspace.publish_edge(
             "a",
             "b",
-            relation="related_to",
             applicability={"scope": {"env": "production"}},
             provenance=Provenance("user", "fixture"),
         )
@@ -599,9 +591,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         await self.seed(
             ("a", "Orion color is cobalt."), ("b", "Orion related deployment"), ("c", "jade")
         )
-        await self.workspace.publish_edge(
-            "a", "b", relation="related_to", provenance=Provenance("user", "fixture")
-        )
+        await self.workspace.publish_edge("a", "b", provenance=Provenance("user", "fixture"))
         await self.workspace.append_journal(
             "a",
             subject=SourceSpan("a", "t", 15, 21),
@@ -621,19 +611,19 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
     async def test_disabled_maintenance_and_invalid_selection_make_no_model_calls(self):
         """Disabled policy and invalid node selection leave provider clients untouched."""
         model = ScriptedModelClient([])
-        app = self.app(maintenance=model, policy=MaintenancePolicy(mode="disabled"))
+        app = self.app(graph=model, policy=MaintenancePolicy(mode="disabled"))
         result = await app.ingest(conversation("a", "Orion deployment"))
         self.assertEqual(result.maintenance.status, "disabled")
         self.assertEqual(result.maintenance.usage["model_calls"], 0)
         self.assertEqual(model.requests, [])
-        failed = await self.app(maintenance=model).organize(["missing"])
+        failed = await self.app(graph=model).organize(["missing"])
         self.assertEqual(failed.status, "failed")
         self.assertEqual(failed.error_type, "ConfigurationError")
         self.assertEqual(model.requests, [])
 
     async def test_configuration_and_query_scope_fail_before_provider_calls(self):
         """Invalid policy limits or query applicability are rejected before inference."""
-        for kwargs in ({"mode": "unknown"}, {"max_nodes": 0}, {"allowed_relations": "related_to"}):
+        for kwargs in ({"mode": "unknown"}, {"max_nodes": 0}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ConfigurationError):
                 MaintenancePolicy(**kwargs)
         with self.assertRaises(ConfigurationError):
@@ -644,10 +634,10 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
     async def test_synchronous_preparation_exhaustion_never_dispatches_a_model(self):
         """A blocking index build consumes the application deadline before provider admission."""
         await self.seed(("a", "Orion source"))
-        root = ScriptedModelClient(
+        main = ScriptedModelClient(
             [operation("finish", answer="Unknown", citations=[], unresolved=["No evidence"])]
         )
-        app = self.app(root=root)
+        app = self.app(main=main)
         evidence = await Evidence.open(self.workspace, passage_chars=app.passage_chars)
         self.addAsyncCleanup(evidence.close)
         clock = NS(now=0.0)
@@ -661,9 +651,11 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             patch("llgm.llgm.Evidence.open", side_effect=slow_open),
             patch("llgm.llgm.time", NS(monotonic=lambda: clock.now)),
         ):
-            result = await app.answer("Question", node_id="a", budget=Budget(timeout_seconds=0.01), remember=False)
+            result = await app.answer(
+                "Question", node_id="a", budget=Budget(timeout_seconds=0.01), remember=False
+            )
         self.assertEqual(result.status, "budget_exhausted")
-        self.assertEqual(root.requests, [])
+        self.assertEqual(main.requests, [])
         self.assertEqual(result.usage["model_calls"], 0)
         self.assertEqual(result.usage["preparation_seconds"], 0.04)
         self.assertEqual(result.usage["inference_seconds"], 0)
@@ -684,7 +676,9 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
 
         app = self.app()
         with patch("llgm.llgm.Evidence.open", side_effect=blocked_open):
-            result = await app.answer("Question", budget=Budget(timeout_seconds=0.01), remember=False)
+            result = await app.answer(
+                "Question", budget=Budget(timeout_seconds=0.01), remember=False
+            )
         self.assertTrue(cancelled.is_set())
         self.assertEqual(result.status, "budget_exhausted")
         self.assertEqual(result.usage["model_calls"], 0)
@@ -715,9 +709,9 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         )
         date = "2023/05/30 (Tue) 10:18"
         models = Models()
-        result = await self.app(root=models.root, sidecar=models.sidecar).answer(
-            "Orion region", query_date=date
-        , remember=False)
+        result = await self.app(main=models.main, reader=models.reader).answer(
+            "Orion region", query_date=date, remember=False
+        )
         self.assertEqual(result.status, "partial")
         context = json.loads(models.child_requests[0].messages[1].content)
         self.assertEqual(context["query_date"], date)
@@ -739,11 +733,12 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 """Record closure of this factory-owned model adapter."""
                 self.closed = True
 
-        clients = [OwnedClient(), OwnedClient()]
+        clients = [OwnedClient(), OwnedClient(), OwnedClient()]
         settings = Settings(
             workspace_path=str(self.path / "factory"),
-            root_model="root",
-            sidecar_model="small",
+            main_model="main",
+            graph_model="graph",
+            reader_model="small",
             max_model_calls=7,
             max_output_tokens=512,
         )
@@ -752,18 +747,18 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(app.inference_budget.max_model_calls, 7)
                 self.assertEqual(app.inference_budget.max_output_tokens, 512)
                 self.assertEqual(app.max_depth, 2)
-                self.assertIs(app.maintenance_model, clients[1])
+                self.assertIs(app.graph_model, clients[2])
                 await app.ingest(conversation("a", "Exact factory source"), organize=False)
                 workspace = app.workspace
-            self.assertEqual(create.call_count, 2)
+            self.assertEqual(create.call_count, 3)
         self.assertTrue(all(client.closed for client in clients))
         with self.assertRaises(ConfigurationError):
             await workspace.sources()
         async with Workspace.open(self.path / "factory") as reopened:
             self.assertIn("Exact factory source", (await reopened.resolve(NodeRef("a"))).text)
 
-    async def test_factory_closes_created_resources_when_second_model_construction_fails(self):
-        """A partial factory failure closes the first model and opened metadata connection."""
+    async def test_factory_closes_created_resources_when_maintenance_construction_fails(self):
+        """A maintenance adapter failure closes both inference clients and the metadata connection."""
         closed = []
 
         class FirstClient(ScriptedModelClient):
@@ -774,7 +769,10 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 closed.append("first")
 
         settings = Settings(
-            workspace_path=str(self.path / "factory"), root_model="root", sidecar_model="small"
+            workspace_path=str(self.path / "factory"),
+            main_model="main",
+            graph_model="graph",
+            reader_model="small",
         )
         opened = []
         original = Workspace.open
@@ -789,13 +787,17 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             patch("llgm.llgm.Workspace.open", side_effect=track),
             patch(
                 "llgm.models.create_model",
-                side_effect=[FirstClient([]), ConfigurationError("second adapter unavailable")],
+                side_effect=[
+                    FirstClient([]),
+                    FirstClient([]),
+                    ConfigurationError("maintenance adapter unavailable"),
+                ],
             ),
         ):
             with self.assertRaises(ConfigurationError):
                 async with LLGM.from_settings(settings):
                     self.fail("Factory must not yield after partial construction failure")
-        self.assertEqual(closed, ["first"])
+        self.assertEqual(closed, ["first", "first"])
         with self.assertRaises(ConfigurationError):
             await opened[0].sources()
 
@@ -805,8 +807,9 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             Settings(workspace_path=str(self.path / "missing")),
             Settings(
                 workspace_path=str(self.path / "unsupported"),
-                root_model="root",
-                sidecar_model="small",
+                main_model="main",
+                graph_model="graph",
+                reader_model="small",
                 retriever_backend="dense",
             ),
         ]
@@ -841,11 +844,12 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 """Record release by the settings factory's exit stack."""
                 self.closed = True
 
-        clients = [FailingOwnedClient(), FailingOwnedClient()]
+        clients = [FailingOwnedClient(), FailingOwnedClient(), FailingOwnedClient()]
         settings = Settings(
             workspace_path=str(self.path / "factory-inference"),
-            root_model="root",
-            sidecar_model="small",
+            main_model="main",
+            graph_model="graph",
+            reader_model="small",
         )
         with patch("llgm.models.create_model", side_effect=clients):
             with self.assertRaises(RuntimeError):
@@ -885,9 +889,9 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             return handle
 
         models = Models()
-        root = models.root
+        main = models.main
         try:
-            app = self.app(root=root, sidecar=models.sidecar, evidence_factory=factory)
+            app = self.app(main=main, reader=models.reader, evidence_factory=factory)
             maintenance = await app.organize(["b"])
             result = await app.answer("Which region?", remember=False)
             self.assertEqual(maintenance.status, "completed")
@@ -905,8 +909,9 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         """Custom retrieval configuration is usable without replacing model or storage setup."""
         settings = Settings(
             workspace_path=str(self.path / "injected"),
-            root_model="root",
-            sidecar_model="small",
+            main_model="main",
+            graph_model="graph",
+            reader_model="small",
             retriever_backend="application-search",
         )
         calls = []
@@ -921,7 +926,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         async def close():
             """Match the factory-owned adapter lifecycle in this deterministic test."""
 
-        clients = [models.root, models.sidecar]
+        clients = [models.main, models.reader, ScriptedModelClient([])]
         for client in clients:
             client.aclose = close
         with patch("llgm.models.create_model", side_effect=clients):
@@ -929,7 +934,9 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 settings, evidence_factory=factory, repl_factory=ReplayFactory()
             ) as app:
                 await app.ingest(conversation("a", "Orion region is eu-west-1."), organize=False)
-                self.assertEqual((await app.answer("Which region?", remember=False)).status, "completed")
+                self.assertEqual(
+                    (await app.answer("Which region?", remember=False)).status, "completed"
+                )
         self.assertEqual(len(calls), 1)
         with patch("llgm.llgm.Workspace.open") as opening:
             with self.assertRaises(ConfigurationError):
@@ -940,7 +947,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
     async def test_repeated_answers_reuse_index_and_update_only_changed_sources(self):
         """Application preparation indexes each committed source once across repeated questions."""
         await self.seed(("a", "Orion old region"), ("b", "Atlas other region"))
-        root = ScriptedModelClient(
+        main = ScriptedModelClient(
             [
                 operation(
                     "finish", answer="Unknown", citations=[], unresolved=["No evidence inspected"]
@@ -948,7 +955,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             ]
             * 3
         )
-        app = self.app(root=root)
+        app = self.app(main=main)
         first = await app.answer("Which region?", remember=False)
         second = await app.answer("Which region?", remember=False)
         await app.ingest(conversation("a-update", "Orion new region"), organize=False)
@@ -967,8 +974,8 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         await self.seed(("a", "Orion region A"), ("b", "Orion region B"), ("c", "Orion region C"))
         models = Models()
         result = await self.app(
-            root=models.root,
-            sidecar=models.sidecar,
+            main=models.main,
+            reader=models.reader,
             max_seed_nodes=2,
             retrieval_k=6,
             max_concurrency=1,
@@ -980,18 +987,20 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entered, selection["selected"])
         self.assertEqual(result.status, "partial")
         self.assertIn("seed_limit", str(result.evidence.unresolved))
-        self.assertEqual(len(models.root_requests), 1)
+        self.assertEqual(len(models.main_requests), 1)
 
     async def test_empty_retrieval_returns_explicit_gap_without_model_calls(self):
-        """A missing seed does not turn into an unsupported root guess or implicit search policy."""
+        """A missing seed does not turn into an unsupported main guess or implicit search policy."""
         await self.seed(("a", "Orion region"))
         models = Models()
-        result = await self.app(root=models.root, sidecar=models.sidecar).answer("zqxunmatched", remember=False)
+        result = await self.app(main=models.main, reader=models.reader).answer(
+            "zqxunmatched", remember=False
+        )
         self.assertEqual(result.status, "partial")
         self.assertEqual(result.usage["model_calls"], 0)
         self.assertEqual(result.usage["searches"], 1)
         self.assertIn("No seed nodes", str(result.evidence.unresolved))
-        self.assertEqual(models.root_requests + models.child_requests, [])
+        self.assertEqual(models.main_requests + models.child_requests, [])
 
 
 if __name__ == "__main__":

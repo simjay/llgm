@@ -201,7 +201,7 @@ def live_recursive():
     """Validate both provider/model roles before recursive hosted execution."""
     require_opt_in("LLGM_TEST_RECURSIVE")
     result = {}
-    for role in ("ROOT", "SIDECAR"):
+    for role in ("MAIN", "READER"):
         provider = required_env(f"LLGM_TEST_RECURSIVE_{role}_PROVIDER")
         if provider not in {"openai", "anthropic"}:
             pytest.fail(

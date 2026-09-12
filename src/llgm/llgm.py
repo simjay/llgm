@@ -2,7 +2,7 @@
 
 The application owns per-answer evidence handles, while the caller owns its
 Workspace, reusable index and model clients. Evidence reads apply complete local journals.
-Automatic publication validates references and a declared relation allowlist.
+Automatic publication validates evidence for generic connections.
 It does not certify the semantic truth of model-proposed links.
 """
 
@@ -37,7 +37,7 @@ from llgm.memory.evidence import (
     accept_link,
     propose_links,
 )
-from llgm.memory.maintenance import MaintenancePolicy, MaintenanceResult, _MaintenanceClient
+from llgm.memory.maintenance import MaintenancePolicy, MaintenanceResult, _GraphClient
 from llgm.memory.query import QueryEvidence
 from llgm.memory.workspace import Workspace
 from llgm.models.base import ModelClient
@@ -64,10 +64,10 @@ class LLGM:
     def __init__(
         self,
         workspace: Workspace,
-        root_model: ModelClient,
-        sidecar_model: ModelClient,
+        main_model: ModelClient,
+        reader_model: ModelClient,
         *,
-        maintenance_model: ModelClient | None = None,
+        graph_model: ModelClient | None,
         maintenance_policy: MaintenancePolicy | None = None,
         inference_budget: Budget | None = None,
         max_depth: int = 3,
@@ -88,6 +88,8 @@ class LLGM:
         The factory receives ``workspace`` and ``passage_chars``
         and returns an open evidence handle. The application
         closes each returned handle. Injected retrievers remain caller-owned.
+        Supply a graph client explicitly. With maintenance disabled,
+        ``graph_model=None`` is allowed.
         """
         for name, value in (
             ("passage_chars", passage_chars),
@@ -118,14 +120,12 @@ class LLGM:
             if type(value) is not int or value < (0 if name == "max_depth" else 1):
                 raise ConfigurationError(f"Invalid {name}")
         self.workspace = workspace
-        self.root_model, self.sidecar_model = root_model, sidecar_model
-        self.maintenance_model = (
-            maintenance_model if maintenance_model is not None else sidecar_model
-        )
+        self.main_model, self.reader_model = main_model, reader_model
+        self.graph_model = graph_model
         self.maintenance_policy = maintenance_policy or MaintenancePolicy()
         self.inference_budget = inference_budget or Budget(
             max_model_calls=40,
-            max_sidecar_calls=36,
+            max_reader_calls=36,
             max_searches=8,
             max_evidence_tokens=65536,
             max_bundle_tokens=8000,
@@ -143,7 +143,7 @@ class LLGM:
         self.last_trace: list[dict] = []
         self.last_usage: dict = {}
         self._maintenance_lock = asyncio.Lock()
-        self._conversation_lock = workspace._conversation_lock
+        self._conversation_lock = getattr(workspace, "_conversation_lock", asyncio.Lock())
 
     @classmethod
     @asynccontextmanager
@@ -164,7 +164,7 @@ class LLGM:
 
         Use ``async with LLGM.from_settings() as memory`` to read environment
         settings when the context is entered. An explicit ``Settings`` instance
-        is used unchanged. Both model IDs must be configured.
+        is used unchanged. All three model IDs must be configured.
         ``runtime_options`` supplies constructor options
         such as ``max_depth`` and ``max_steps``. Settings supply storage, providers,
         retrieval limits, concurrency, and the answer budget.
@@ -176,10 +176,10 @@ class LLGM:
         if not all(
             isinstance(getattr(settings, role + "_model", None), str)
             and getattr(settings, role + "_model").strip()
-            for role in ("root", "sidecar")
+            for role in ("main", "reader", "graph")
         ):
             raise ConfigurationError(
-                "Set explicit root_model and sidecar_model for application inference"
+                "Set explicit main_model, reader_model, and graph_model for the application"
             )
         if evidence_factory is not None and not callable(evidence_factory):
             raise ConfigurationError("evidence_factory must be an async callable")
@@ -206,7 +206,7 @@ class LLGM:
         async with AsyncExitStack() as stack:
             workspace = await stack.enter_async_context(Workspace.open(settings=settings))
             clients = []
-            for role in ("root", "sidecar"):
+            for role in ("main", "reader", "graph"):
                 client = create_model(
                     getattr(settings, role + "_provider"),
                     getattr(settings, role + "_model"),
@@ -220,6 +220,7 @@ class LLGM:
                 workspace,
                 clients[0],
                 clients[1],
+                graph_model=clients[2],
                 maintenance_policy=maintenance_policy,
                 evidence_factory=evidence_factory,
                 **options,
@@ -238,7 +239,7 @@ class LLGM:
         organize: bool = True,
         conversation_id: str = "default",
     ) -> IngestionOutcome:
-        """Store a conversation and optionally discover relationships to other sources.
+        """Catch up on an earlier conversation batch with automatic topic routing.
 
         :param conversation: A string, a sequence of chat turns, or a
             ``Conversation`` with source metadata. A string becomes one user
@@ -246,8 +247,10 @@ class LLGM:
             and either ``text`` or ``content``. Text is preserved exactly.
         :param idempotency_key: Reuse the source when retrying identical input.
             Reusing a key with different input raises a conflict.
-        :param organize: Run maintenance after storing the source. False skips
-            model calls for this ingestion. The maintenance policy also applies.
+        :param organize: Discover connections after storing the batch. False
+            skips connection discovery but still permits model topic routing.
+        :param conversation_id: Persistent chat whose topic this import continues.
+            A supplied Conversation.node_id bypasses routing for an exact import.
         :returns: The stored source ID and a separate maintenance outcome.
             Maintenance failure does not remove the source. Retrying ingestion
             can run maintenance again even when the source already exists.
@@ -280,17 +283,21 @@ class LLGM:
 
     async def _remember(self, conversation, conversation_id, *, idempotency_key=None, ledger=None):
         """Route and append incoming turns while retaining their original attribution."""
-        from llgm.memory.topics import choose_topic
         from llgm.memory.conversation import append_fingerprint
+        from llgm.memory.topics import choose_topic
 
         if not isinstance(conversation_id, str) or not conversation_id.strip():
             raise ConfigurationError("conversation_id must be nonempty text")
         ledger = ledger or RunLedger(self.maintenance_policy.budget, byte_token_bound)
         self.workspace._key(idempotency_key)
         if idempotency_key is not None:
-            prior = await self.workspace._run(lambda: self.workspace._retry(
-                "conversation_append", idempotency_key, append_fingerprint(conversation_id, conversation)
-            ))
+            prior = await self.workspace._run(
+                lambda: self.workspace._retry(
+                    "conversation_append",
+                    idempotency_key,
+                    append_fingerprint(conversation_id, conversation),
+                )
+            )
             if prior is not None:
                 return IngestResult(**prior, created=False), ledger
         async with asyncio.timeout(ledger.remaining_seconds()):
@@ -299,8 +306,12 @@ class LLGM:
             else:
                 async with await self._open_evidence() as evidence:
                     selected = await choose_topic(
-                        self.workspace, evidence, self.maintenance_model, ledger,
-                        conversation_id, conversation.turns,
+                        self.workspace,
+                        evidence,
+                        self.graph_model,
+                        ledger,
+                        conversation_id,
+                        conversation.turns,
                     )
             source = await self.workspace.append_conversation(
                 conversation_id, conversation, node_id=selected, idempotency_key=idempotency_key
@@ -345,19 +356,18 @@ class LLGM:
                         if set(selected) - visible:
                             raise ConfigurationError("Maintenance node does not exist")
                         deferred = tuple(selected[policy.max_nodes :])
-                        model = _MaintenanceClient(
-                            self.maintenance_model, ledger, policy.allowed_relations
-                        )
+                        model = _GraphClient(self.graph_model, ledger)
                         for node_id in selected[: policy.max_nodes]:
                             ledger.remaining_seconds()
                             if len(visible) < 2:
                                 continue
                             if ledger.searches >= policy.budget.max_searches:
                                 raise BudgetExceeded("Maintenance search allowance exhausted")
-                            source = await evidence.read(NodeRef(node_id))
+                            prefix = await evidence.source_prefix(node_id, policy.max_context_chars)
                             ledger.searches += 1
                             hits = await evidence.search(
-                                source.text[: policy.max_context_chars], policy.max_candidates * 4
+                                " ".join(record.text for record in prefix),
+                                policy.max_candidates * 4,
                             )
                             candidates = list(
                                 dict.fromkeys(
@@ -384,7 +394,6 @@ class LLGM:
                                 decision = {
                                     "source_node_id": node_id,
                                     "target_node_id": proposal.target.node_id,
-                                    "relation": proposal.relation,
                                     "decision": reason,
                                 }
                                 if reason == "publish":
@@ -393,7 +402,6 @@ class LLGM:
                                             {
                                                 "source": reference_to_dict(proposal.source),
                                                 "target": reference_to_dict(proposal.target),
-                                                "relation": proposal.relation,
                                                 "applicability": dict(proposal.applicability or {}),
                                                 "support": [
                                                     reference_to_dict(reference)
@@ -420,7 +428,6 @@ class LLGM:
             status, error_type = ("partial" if accepted else "failed"), type(error).__name__
         finally:
             usage = ledger.usage()
-            usage["maintenance_calls"] = usage.pop("sidecar_calls")
             usage["evidence_accounting_policy"] = "unique-presented-passage-json-utf8-bytes"
             self.last_maintenance = MaintenanceResult(
                 status,
@@ -437,12 +444,9 @@ class LLGM:
     def _decision(self, proposal: LinkProposal, edges: Sequence[Edge], published: int) -> str:
         """Apply explicit publication policy without assigning semantic confidence."""
         policy = self.maintenance_policy
-        if proposal.relation not in policy.allowed_relations:
-            return "relation_not_allowed"
         if any(
             edge.source_node_id == proposal.source.node_id
             and edge.target_node_id == proposal.target.node_id
-            and edge.relation == proposal.relation
             and dict(edge.applicability or {}) == dict(proposal.applicability or {})
             for edge in edges
         ):
@@ -520,8 +524,14 @@ class LLGM:
         ):
             raise SchemaError("answer requires user/assistant turns ending with nonempty user text")
         async with self._conversation_lock:
-            ledger = RunLedger(budget or self.inference_budget, byte_token_bound, reserve_root=True)
-            source, ledger = await self._remember(conversation, conversation_id, ledger=ledger)
+            conversation_started = time.monotonic()
+            ledger = RunLedger(budget or self.inference_budget, byte_token_bound, reserve_main=True)
+            try:
+                source, ledger = await self._remember(conversation, conversation_id, ledger=ledger)
+            except BaseException:
+                self.last_usage, self.last_trace = ledger.usage(), list(ledger.events)
+                raise
+            routing_seconds = time.monotonic() - conversation_started
             result = await self._answer(
                 conversation.turns[-1].text,
                 scope=scope,
@@ -541,6 +551,22 @@ class LLGM:
                     ),
                     node_id=source.node_id,
                 )
+            if source.created:
+                maintenance = await self.organize([source.node_id])
+                result.usage["maintenance"] = dict(maintenance.usage)
+                result.trace.append(
+                    {
+                        "kind": "conversation_maintenance",
+                        "status": maintenance.status,
+                        "node_id": source.node_id,
+                        "error_type": maintenance.error_type,
+                    }
+                )
+            result.usage.update(
+                routing_seconds=routing_seconds,
+                total_seconds=time.monotonic() - conversation_started,
+                elapsed_seconds=time.monotonic() - conversation_started,
+            )
             return result
 
     async def _answer(
@@ -590,7 +616,7 @@ class LLGM:
         selected_budget = budget or self.inference_budget
         started = time.monotonic()
         preparation_ledger = ledger or RunLedger(
-            selected_budget, byte_token_bound, reserve_root=True
+            selected_budget, byte_token_bound, reserve_main=True
         )
         preparation = {"kind": "preparation", "status": "started"}
         self.last_trace, self.last_usage = [preparation], {}
@@ -606,7 +632,9 @@ class LLGM:
                     as_of_ms=as_of_ms,
                     max_journal_bytes=self.max_journal_bytes,
                 )
-                seeds = await self._seeds(question, node_id, evidence, preparation_ledger)
+                seeds = await self._seeds(
+                    question, node_id, evidence, preparation_ledger, active_node_id=active_node_id
+                )
                 if active_node_id is not None:
                     page = await self.workspace.source_info(active_node_id, limit=1)
                     page = await self.workspace.source_info(
@@ -637,8 +665,8 @@ class LLGM:
                     preparation["status"] = "budget_exhausted"
                     raise BudgetExceeded("Answer preparation exhausted the run deadline")
                 runtime = NodeRuntime(
-                    self.root_model,
-                    self.sidecar_model,
+                    self.main_model,
+                    self.reader_model,
                     scoped,
                     budget=replace(selected_budget, timeout_seconds=remaining),
                     max_depth=self.max_depth,
@@ -712,7 +740,7 @@ class LLGM:
                 result.trace = result.evidence.trace = self.last_trace
         return result
 
-    async def _seeds(self, question, node_id, evidence, ledger):
+    async def _seeds(self, question, node_id, evidence, ledger, *, active_node_id=None):
         """Rank unique source owners without exposing raw retrieval text to models."""
         if node_id is not None:
             ledger.events.append(
@@ -744,7 +772,11 @@ class LLGM:
                 for reference in hit.passage.refs:
                     if reference.node_id == owner and reference not in by_node[owner]:
                         by_node[owner].append(reference)
-        selected = list(by_node)[: self.max_seed_nodes]
+        ranked = list(by_node)
+        if active_node_id is not None:
+            ranked = [active_node_id, *(owner for owner in ranked if owner != active_node_id)]
+            by_node.setdefault(active_node_id, [])
+        selected = ranked[: self.max_seed_nodes]
         ledger.events.append(
             {
                 "kind": "seed_selection",
@@ -754,7 +786,7 @@ class LLGM:
                 "selected": selected,
                 "skipped": [
                     {"node_id": owner, "reason": "seed_limit"}
-                    for owner in list(by_node)[self.max_seed_nodes :]
+                    for owner in ranked[self.max_seed_nodes :]
                 ],
             }
         )

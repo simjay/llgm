@@ -1,4 +1,4 @@
-"""Complete operational sidecars preserve interpretation and stable archived evidence."""
+"""Complete operational journals preserve interpretation and stable archived evidence."""
 
 import asyncio
 import json
@@ -142,7 +142,7 @@ class JournalCompactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(await self.workspace.operational_journal("a")), 4)
 
     async def test_size_bound_counts_complete_utf8_and_overflow_never_truncates(self):
-        """Irreducibly large sidecars raise before returning a prefix or committing partial compaction."""
+        """Irreducibly large journals raise before returning a prefix or committing partial compaction."""
         entry = await self.append("한글 " * 30)
         encoded = json.dumps(
             [journal_to_dict(entry)], ensure_ascii=False, sort_keys=True, separators=(",", ":")

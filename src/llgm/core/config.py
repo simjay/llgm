@@ -33,21 +33,26 @@ class Settings:
     metadata_backend: str = "sqlite"
     database_url: str = field(default="", repr=False)
     retriever_backend: str = "sqlite_fts5"
-    root_provider: str = "openai"
-    root_model: str | None = None
-    root_base_url: str | None = field(default=None, repr=False)
-    root_api_key_env: str | None = None
-    sidecar_provider: str = "openai"
-    sidecar_model: str | None = None
-    sidecar_base_url: str | None = field(default=None, repr=False)
-    sidecar_api_key_env: str | None = None
+    main_provider: str = "openai"
+    main_model: str | None = None
+    main_base_url: str | None = field(default=None, repr=False)
+    main_api_key_env: str | None = None
+    reader_provider: str = "openai"
+    reader_model: str | None = None
+    reader_base_url: str | None = field(default=None, repr=False)
+    reader_api_key_env: str | None = None
+    graph_provider: str = "openai"
+    graph_model: str | None = None
+    graph_base_url: str | None = field(default=None, repr=False)
+    graph_api_key_env: str | None = None
     max_seed_nodes: int = 3
     retrieval_k: int = 12
     max_concurrency: int = 3
     max_journal_bytes: int = 65536
     node_repl_image: str = "python:3.12-slim"
     max_model_calls: int = 40
-    max_sidecar_calls: int = 36
+    max_reader_calls: int = 36
+    max_graph_calls: int = 8
     max_searches: int = 8
     max_evidence_tokens: int = 65536
     max_bundle_tokens: int = 8000
@@ -59,12 +64,15 @@ class Settings:
     def __post_init__(self) -> None:
         """Validate backend compatibility and resolve default local storage locations."""
         optional = {
-            "root_model",
-            "sidecar_model",
-            "root_base_url",
-            "sidecar_base_url",
-            "root_api_key_env",
-            "sidecar_api_key_env",
+            "main_model",
+            "reader_model",
+            "graph_model",
+            "graph_base_url",
+            "graph_api_key_env",
+            "main_base_url",
+            "reader_base_url",
+            "main_api_key_env",
+            "reader_api_key_env",
         }
         for item in fields(self):
             if item.name in _INT_FIELDS or item.name in {"timeout_seconds", "field_sources"}:
@@ -117,7 +125,7 @@ class Settings:
             raise ConfigurationError("database_url scheme does not match metadata_backend")
         if self.metadata_backend == "postgres" and self.retriever_backend == "sqlite_fts5":
             raise ConfigurationError("postgres requires an explicitly compatible retriever_backend")
-        for name in ("root_provider", "sidecar_provider"):
+        for name in ("main_provider", "reader_provider", "graph_provider"):
             if getattr(self, name) not in {"openai", "anthropic", "openai_compatible"}:
                 raise ConfigurationError(f"Unsupported {name}; inject a custom client in Python")
         object.__setattr__(self, "field_sources", MappingProxyType(dict(self.field_sources)))
@@ -172,7 +180,13 @@ class Settings:
     def redacted(self) -> dict[str, Any]:
         """Return diagnostic settings with endpoint credentials and query strings removed."""
         result = {f.name: getattr(self, f.name) for f in fields(self) if f.name != "field_sources"}
-        for name in ("database_url", "blob_uri", "root_base_url", "sidecar_base_url"):
+        for name in (
+            "database_url",
+            "blob_uri",
+            "main_base_url",
+            "reader_base_url",
+            "graph_base_url",
+        ):
             if result[name]:
                 result[name] = redact_url(result[name])
         result["field_sources"] = dict(self.field_sources)
@@ -185,7 +199,8 @@ _INT_FIELDS = {
     "max_concurrency",
     "max_journal_bytes",
     "max_model_calls",
-    "max_sidecar_calls",
+    "max_reader_calls",
+    "max_graph_calls",
     "max_searches",
     "max_evidence_tokens",
     "max_bundle_tokens",

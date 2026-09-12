@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "claim": "independent plumbing smoke",
+  "schema_version": 2,
+  "claim": "Topic-node ten-case synthetic integration smoke",
   "repetitions": 1,
   "case_ids": "all",
   "dataset": {
@@ -20,27 +20,20 @@
     "full_context"
   ],
   "models": {
-    "root": "gpt-4.1-2025-04-14",
-    "sidecar": "gpt-4.1-2025-04-14",
-    "maintenance": "gpt-4.1-2025-04-14",
-    "judge": "gpt-4o-2024-08-06"
+    "main": "gpt-4.1-2025-04-14",
+    "reader": "gpt-4.1-2025-04-14",
+    "judge": "gpt-4o-2024-08-06",
+    "graph": "gpt-4.1-2025-04-14"
   },
   "pricing": {
-    "root": {
+    "main": {
       "source": "https://developers.openai.com/api/docs/models/gpt-4.1",
       "retrieved_date": "2026-09-11",
       "usd_per_million_input_tokens": 2,
       "usd_per_million_cached_input_tokens": 0.5,
       "usd_per_million_output_tokens": 8
     },
-    "sidecar": {
-      "source": "https://developers.openai.com/api/docs/models/gpt-4.1",
-      "retrieved_date": "2026-09-11",
-      "usd_per_million_input_tokens": 2,
-      "usd_per_million_cached_input_tokens": 0.5,
-      "usd_per_million_output_tokens": 8
-    },
-    "maintenance": {
+    "reader": {
       "source": "https://developers.openai.com/api/docs/models/gpt-4.1",
       "retrieved_date": "2026-09-11",
       "usd_per_million_input_tokens": 2,
@@ -53,11 +46,18 @@
       "usd_per_million_input_tokens": 2.5,
       "usd_per_million_cached_input_tokens": 1.25,
       "usd_per_million_output_tokens": 10
+    },
+    "graph": {
+      "source": "https://developers.openai.com/api/docs/models/gpt-4.1",
+      "retrieved_date": "2026-09-11",
+      "usd_per_million_input_tokens": 2,
+      "usd_per_million_cached_input_tokens": 0.5,
+      "usd_per_million_output_tokens": 8
     }
   },
   "budget": {
     "max_model_calls": 25,
-    "max_sidecar_calls": 24,
+    "max_reader_calls": 24,
     "max_searches": 8,
     "max_evidence_tokens": 96000,
     "max_context_tokens": 96000,
@@ -87,12 +87,13 @@
     "max_context_chars": 8000,
     "budget": {
       "max_model_calls": 1,
-      "max_sidecar_calls": 1,
+      "max_reader_calls": 1,
       "max_searches": 1,
       "max_evidence_tokens": 32000,
       "max_context_tokens": 48000,
       "max_output_tokens": 1024,
-      "timeout_seconds": 90
+      "timeout_seconds": 90,
+      "max_graph_calls": 1
     }
   },
   "reader": {
@@ -112,11 +113,11 @@
     "max_unknown_calls": 100
   },
   "policy": {
-    "preparation": "Fresh isolated full history for each case/arm, ordinary ingestion and per-source automatic maintenance for LLGM. No manually supplied edges or patches. No query or gold during construction. Supplied session order and date text preserved. No shared-history merging or speculative amortization.",
-    "comparison": "Same final reader snapshot for all arms. Full context uses all history or explicitly fails admission. BM25 searches once. LLGM uses default seed search and recursive Python delegates. Different information access and work are measured, not concealed.",
+    "preparation": "Fresh isolated history per case and arm. LLGM imports supplied sessions through conservative topic routing with immutable per-turn attribution and generic connections. No question or gold during construction. Query uses remember=False. Baselines import original sessions without model organization.",
+    "comparison": "Current topic construction has no hosted measurement. Earlier session-per-node measurements do not establish this behavior. Match models and budgets before architecture claims.",
     "exposure": "LongMemEval-S contains overlapping histories and previously exposed diagnostic questions. This is a public benchmark result, not an untouched independent holdout.",
     "target": "Five percentage points over strongest reproduced framework at no higher total cost remains the goal. These initial control arms alone do not compare Mem0 or Graphiti.",
     "cost": "Generation includes maintenance, query and unknown call liabilities. Judge costs separate. Token-based API estimates are not invoices. Local resources reported but unpriced, so equal total cost is unestablished.",
-    "execution": "Two cases concurrently, each three-arm sequence serially, with a shared 400000-token sliding 60-second window for generation and separate judging window. No provider or answer retries. Separate 600-second judge window. This synthetic run verifies maintenance, Docker cleanup, token pacing and durable accounting before freezing the full candidate."
+    "execution": "All scheduled attempts retained with no answer retries. Existing generation and judge allowances remain admission limits. Full benchmark execution is separate explicit work."
   }
 }

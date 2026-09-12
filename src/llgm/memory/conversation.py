@@ -11,10 +11,16 @@ def append_fingerprint(conversation_id, conversation):
     """Identify exact imported bytes independently of a model's routing decision."""
     from llgm.memory.workspace import _json
 
-    return hashlib.sha256(_json({"conversation_id": conversation_id,
-        "turns": [(t.turn_id, t.role, t.text) for t in conversation.turns],
-        "metadata": dict(conversation.metadata), "timestamp_ms": conversation.timestamp_ms,
-    }).encode()).hexdigest()
+    return hashlib.sha256(
+        _json(
+            {
+                "conversation_id": conversation_id,
+                "turns": [(t.turn_id, t.role, t.text) for t in conversation.turns],
+                "metadata": dict(conversation.metadata),
+                "timestamp_ms": conversation.timestamp_ms,
+            }
+        ).encode()
+    ).hexdigest()
 
 
 def append_conversation(workspace, conversation_id, conversation, *, node_id, idempotency_key):

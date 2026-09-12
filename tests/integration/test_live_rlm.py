@@ -1,6 +1,6 @@
 """Opt-in hosted-model and Docker check of the executable recursive RLM loop.
 
-Set both LLGM_TEST_RLM=1 and LLGM_TEST_DOCKER=1. Declare ROOT and CHILD
+Set both LLGM_TEST_RLM=1 and LLGM_TEST_DOCKER=1. Declare MAIN and READER
 provider/model pairs through LLGM_TEST_RLM_<ROLE>_PROVIDER and
 LLGM_TEST_RLM_<ROLE>_MODEL, plus their normal provider credentials. Both roles
 may use the same explicit model ID. LLGM_REPL_DOCKER_IMAGE must name a trusted
@@ -71,7 +71,7 @@ def live_rlm_config():
     if any(value == "0" for value in gates.values()):
         pytest.skip("Set both LLGM_TEST_RLM=1 and LLGM_TEST_DOCKER=1")
     models = {}
-    for role in ("ROOT", "CHILD"):
+    for role in ("MAIN", "READER"):
         provider = _required_env(f"LLGM_TEST_RLM_{role}_PROVIDER")
         if provider not in {"openai", "anthropic"}:
             pytest.fail("RLM live test requires an openai or anthropic provider", pytrace=False)
@@ -170,7 +170,7 @@ def test_hosted_rlm_selects_external_context_and_recurses(live_rlm_config, integ
     context_json = json.dumps(context, ensure_ascii=False, allow_nan=False)
     budget = Budget(
         max_model_calls=12,
-        max_sidecar_calls=8,
+        max_reader_calls=8,
         max_searches=1,
         max_evidence_tokens=32000,
         max_bundle_tokens=8000,
@@ -200,7 +200,7 @@ def test_hosted_rlm_selects_external_context_and_recurses(live_rlm_config, integ
         "Save the llm_query return value in child_answer; print only 'child returned'. "
         "Third, in another python operation print the saved child_answer variable. Finally, "
         "finish with only that returned release token. Do not print all source records or "
-        "solve the token directly at the root. Use the required python/finish JSON operations."
+        "solve the token directly at the main. Use the required python/finish JSON operations."
     )
     assert expected not in prompt
     record.update(
@@ -228,8 +228,8 @@ def test_hosted_rlm_selects_external_context_and_recurses(live_rlm_config, integ
                 for role, config in live_rlm_config["models"].items()
             }
             runtime = RLMRuntime(
-                models["root"],
-                models["child"],
+                models["main"],
+                models["reader"],
                 budget=budget,
                 repl_config=repl_config,
                 max_depth=1,
@@ -275,28 +275,28 @@ def test_hosted_rlm_selects_external_context_and_recurses(live_rlm_config, integ
             assert result.status == "completed", "Inspect the recorded RLM protocol attempt"
             assert result.answer.strip() == expected
             assert not result.unresolved
-            assert result.provenance["root_context_sha256"] == record["fixture"]["context_sha256"]
+            assert result.provenance["main_context_sha256"] == record["fixture"]["context_sha256"]
             assert result.provenance["repl"]["image"] == live_rlm_config["docker"]["image_id"]
             events = result.trace
             entered = [event for event in events if event.get("kind") == "enter"]
-            roots = [event for event in entered if event["depth"] == 0]
+            mains = [event for event in entered if event["depth"] == 0]
             children = [event for event in entered if event["depth"] == 1]
-            assert len(roots) == len(children) == 1
+            assert len(mains) == len(children) == 1
             assert len(entered) == 2
-            root_id, child_id = roots[0]["invocation_id"], children[0]["invocation_id"]
-            assert children[0]["parent_id"] == root_id
-            assert children[0]["context_bytes"] < roots[0]["context_bytes"]
+            main_id, child_id = mains[0]["invocation_id"], children[0]["invocation_id"]
+            assert children[0]["parent_id"] == main_id
+            assert children[0]["context_bytes"] < mains[0]["context_bytes"]
             python_events = [event for event in events if event.get("kind") == "python"]
-            assert sum(event["invocation_id"] == root_id for event in python_events) >= 3
+            assert sum(event["invocation_id"] == main_id for event in python_events) >= 3
             assert any(event["invocation_id"] == child_id for event in python_events)
             assert all(event["bytes"] > 0 and event["sha256"] for event in python_events)
             returned = next(
                 index
                 for index, event in enumerate(events)
-                if event.get("kind") == "child_return" and event["invocation_id"] == root_id
+                if event.get("kind") == "child_return" and event["invocation_id"] == main_id
             )
             assert any(
-                event.get("kind") == "delegate" and event["invocation_id"] == root_id
+                event.get("kind") == "delegate" and event["invocation_id"] == main_id
                 for event in events[:returned]
             )
             assert any(
@@ -304,17 +304,17 @@ def test_hosted_rlm_selects_external_context_and_recurses(live_rlm_config, integ
                 for event in events[:returned]
             )
             assert any(
-                event.get("kind") == "python" and event["invocation_id"] == root_id
+                event.get("kind") == "python" and event["invocation_id"] == main_id
                 for event in events[returned + 1 :]
             )
             assert any(
-                event.get("kind") == "model" and event["invocation_id"] == root_id
+                event.get("kind") == "model" and event["invocation_id"] == main_id
                 for event in events[returned + 1 :]
             )
             calls = [event for event in events if event.get("kind") == "model"]
-            assert {event["role"] for event in calls} == {"root", "sidecar"}
+            assert {event["role"] for event in calls} == {"main", "reader"}
             for event in calls:
-                role = "root" if event["role"] == "root" else "child"
+                role = "main" if event["role"] == "main" else "reader"
                 declared = live_rlm_config["models"][role]
                 assert event["provider"] == declared["provider"]
                 assert event["model"] == declared["model"]
@@ -322,9 +322,7 @@ def test_hosted_rlm_selects_external_context_and_recurses(live_rlm_config, integ
                 assert event["input_tokens"] is not None
                 assert event["output_tokens"] is not None
             assert result.usage["model_calls"] == len(calls)
-            assert result.usage["sidecar_calls"] == sum(
-                event["role"] == "sidecar" for event in calls
-            )
+            assert result.usage["reader_calls"] == sum(event["role"] == "reader" for event in calls)
             assert result.usage["python_executions"] == len(python_events)
             assert result.usage["recursive_invocations"] == 1
             assert result.usage["known_input_tokens"] > 0
@@ -332,7 +330,7 @@ def test_hosted_rlm_selects_external_context_and_recurses(live_rlm_config, integ
             assert result.usage["unknown_usage_calls"] == 0
             opened = [event for event in events if event.get("kind") == "repl_open"]
             closed = [event for event in events if event.get("kind") == "repl_closed"]
-            assert {event["invocation_id"] for event in opened} == {root_id, child_id}
+            assert {event["invocation_id"] for event in opened} == {main_id, child_id}
             assert len({event["container_name"] for event in opened}) == 2
             assert {event["container_name"] for event in opened} == {
                 event["container_name"] for event in closed

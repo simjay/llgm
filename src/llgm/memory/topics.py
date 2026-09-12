@@ -59,10 +59,17 @@ async def choose_topic(workspace, evidence, model, ledger, conversation_id, turn
             "candidates": candidates,
             "incoming": [{**item, "content": item["content"][:2048]} for item in incoming],
         }
+        encoded = json.dumps(payload)
+        exposed = ledger.count(encoded)
+        if ledger.exposed_tokens + exposed > ledger.budget.max_evidence_tokens:
+            from llgm.core.errors import BudgetExceeded
+
+            raise BudgetExceeded("Topic routing evidence allowance exhausted")
+        ledger.exposed_tokens += exposed
         text = await ledger.call(
             model,
-            [Message("system", _INSTRUCTIONS), Message("user", json.dumps(payload))],
-            role="sidecar",
+            [Message("system", _INSTRUCTIONS), Message("user", encoded)],
+            role="graph",
         )
         try:
             decision = json.loads(text)

@@ -57,7 +57,7 @@ class ReplayREPL:
         elif code == SEARCH:
             operation = {"op": "search", "query": "jade", "k": 1}
         elif code == EDGES:
-            operation = {"op": "edges", "node_id": None, "relation": None}
+            operation = {"op": "edges", "node_id": None}
         elif code == CHILD:
             operation = {"op": "query_node", "node_id": "b", "question": "Find the region"}
         elif code == CYCLE:
@@ -96,9 +96,9 @@ class Models:
     def __init__(self, plans=None):
         """Specify local operation plans without prescribing runtime evidence IDs."""
         self.plans = plans or {}
-        self.child_requests, self.root_requests = [], []
-        self.sidecar = CallableModelClient(self.child)
-        self.root = CallableModelClient(self.synthesize)
+        self.child_requests, self.main_requests = [], []
+        self.reader = CallableModelClient(self.child)
+        self.main = CallableModelClient(self.synthesize)
 
     async def child(self, request):
         """Follow the declared local plan, then cite IDs received from its last observation."""
@@ -117,7 +117,7 @@ class Models:
 
     async def synthesize(self, request):
         """Combine attributed branch findings and preserve their supplied canonical citations."""
-        self.root_requests.append(request)
+        self.main_requests.append(request)
         payload = json.loads(request.messages[1].content)
         branches = payload["branches"]
         citations = [record["id"] for record in payload["evidence"]]

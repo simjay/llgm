@@ -74,8 +74,8 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         node_id,
         value,
         *,
-        relation="related_to",
         applicability=None,
+        relation="note",
         subject=None,
         record_kind="assertion",
     ):
@@ -90,10 +90,10 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
             applicability=applicability,
         )
 
-    async def edge(self, source, target, relation="related_to"):
+    async def edge(self, source, target):
         """Publish primary adjacency without writing semantic journal records."""
         return await self.workspace.publish_edge(
-            source, target, relation=relation, provenance=Provenance("user", "unit-contract")
+            source, target, provenance=Provenance("user", "unit-contract")
         )
 
     async def correction(self, target, value, *, relation="supersedes", applicability=None):
@@ -145,9 +145,7 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
                     [{"role": "user", "text": "additional magenta", "turn_id": "t"}], node_id="c"
                 )
             )
-            await writer.publish_edge(
-                "a", "b", relation="related_to", provenance=Provenance("user", "writer")
-            )
+            await writer.publish_edge("a", "b", provenance=Provenance("user", "writer"))
             await writer.append_journal(
                 "a",
                 subject=NodeRef("a"),
@@ -221,18 +219,18 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
             await evidence.read(JournalRef("a", pointer.entry_id, 0, 1))
 
     async def test_graph_links_are_directed_filtered_and_deduplicated(self):
-        """Neighbor discovery follows typed directed links without duplicate endpoints."""
+        """Neighbor discovery follows generic directed connections without duplicate endpoints."""
         for node in "abc":
             await self.source(node, node)
-        await self.edge("a", "b", relation="supported_by")
-        await self.edge("a", "b", relation="supported_by")
-        await self.edge("a", "c", relation="contradicts")
+        await self.edge("a", "b")
+        await self.edge("a", "b")
+        await self.edge("a", "c")
         evidence = await self.open()
-        self.assertEqual(await evidence.neighbors("a", "supported_by"), [NodeRef("b")])
+        self.assertEqual(await evidence.neighbors("a"), [NodeRef("b"), NodeRef("c")])
         self.assertEqual(await evidence.neighbors("b"), [])
         self.assertEqual(await evidence.neighbors("a"), [NodeRef("b"), NodeRef("c")])
 
-    async def test_edge_descriptions_preserve_distinct_relations_and_stored_attribution(self):
+    async def test_edge_descriptions_preserve_generic_connections_and_stored_attribution(self):
         """Neighbor descriptions retain real edge metadata without loading target text or inventing relevance."""
         source = await self.source("a", "entry source sentinel")
         target = await self.source("b", "credential source sentinel")
@@ -248,10 +246,10 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         )
         applicability = {"scope": {"env": "prod"}, "valid_from_ms": 100}
         credential = await self.workspace.publish_edge(
-            "a", "b", relation="credential", provenance=provenance, applicability=applicability
+            "a", "b", provenance=provenance, applicability=applicability
         )
-        corroboration = await self.edge("a", "b", "supported_by")
-        contact = await self.edge("a", "c", "incident_contact")
+        corroboration = await self.edge("a", "b")
+        contact = await self.edge("a", "c")
         evidence = await self.open()
         with patch.object(
             self.workspace.blob_store,
@@ -266,7 +264,6 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
             "edge_id": credential.edge_id,
             "source_node_id": "a",
             "reference": {"type": "node", "node_id": "b"},
-            "relation": "credential",
             "provenance": {
                 "origin": "model",
                 "producer": "maintenance",
@@ -281,27 +278,41 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
             "recorded_at_ms": credential.recorded_at_ms,
         }
         self.assertEqual(records[credential.edge_id], expected)
-        self.assertEqual(await evidence.edge_descriptions("a", "credential"), [expected])
+        self.assertEqual(
+            next(
+                row
+                for row in await evidence.edge_descriptions("a")
+                if row["edge_id"] == credential.edge_id
+            ),
+            expected,
+        )
         self.assertEqual(records[contact.edge_id]["reference"], {"type": "node", "node_id": "c"})
-        self.assertEqual(records[contact.edge_id]["relation"], "incident_contact")
+        self.assertNotIn("relation", records[contact.edge_id])
         self.assertEqual(await evidence.edge_descriptions("b"), [])
         self.assertNotIn("source sentinel", json.dumps(descriptions))
         records[credential.edge_id]["applicability"]["scope"]["env"] = "changed"
         records[credential.edge_id]["provenance"]["supporting_references"][0]["node_id"] = "c"
-        self.assertEqual(await evidence.edge_descriptions("a", "credential"), [expected])
+        self.assertEqual(
+            next(
+                row
+                for row in await evidence.edge_descriptions("a")
+                if row["edge_id"] == credential.edge_id
+            ),
+            expected,
+        )
 
     async def test_edge_descriptions_refresh_withdrawal_and_survive_reopen(self):
         """Description reads follow current edge publication and withdrawal across workspace handles."""
         for node in "abc":
             await self.source(node, node)
-        edge = await self.edge("a", "b", "credential")
+        edge = await self.edge("a", "b")
         evidence = await self.open()
         original = await evidence.edge_descriptions("a")
         self.assertEqual([record["edge_id"] for record in original], [edge.edge_id])
         async with Workspace.open(self.path) as writer:
             await writer.withdraw_edge(edge.edge_id, provenance=Provenance("user", "reviewer"))
             replacement = await writer.publish_edge(
-                "a", "c", relation="credential", provenance=Provenance("user", "reviewer")
+                "a", "c", provenance=Provenance("user", "reviewer")
             )
         current = await evidence.edge_descriptions("a")
         self.assertEqual([record["edge_id"] for record in current], [replacement.edge_id])
@@ -768,7 +779,6 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
             "links": [
                 {
                     "target_node_id": "b",
-                    "relation": "supported_by",
                     "supporting_references": [reference_to_dict(source), reference_to_dict(target)],
                     "rationale": "Both describe Orion storage.",
                 }
@@ -824,7 +834,6 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
             "links": [
                 {
                     "target_node_id": "b",
-                    "relation": "related_to",
                     "supporting_references": [
                         reference_to_dict(source_ref),
                         reference_to_dict(target_ref),
@@ -928,7 +937,7 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entry.provenance.origin, "model")
         self.assertEqual(entry.provenance.model, "small-model")
         self.assertEqual(entry.provenance.supporting_references, (source, target))
-        self.assertEqual(entry.provenance.prompt_version, "link-proposal-v4")
+        self.assertEqual(entry.provenance.prompt_version, "link-proposal-v6")
         self.assertEqual(await evidence.neighbors("a"), [NodeRef("b")])
 
     async def test_acceptance_is_independent_of_unrelated_journal_appends(self):
@@ -992,7 +1001,6 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         proposal = LinkProposal(
             NodeRef("a"),
             NodeRef("b"),
-            "related_to",
             (source, target),
             "rationale",
             "model",
@@ -1025,7 +1033,6 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
         proposal = LinkProposal(
             NodeRef("a"),
             NodeRef("c"),
-            "related_to",
             (source, target),
             "rationale",
             "model",

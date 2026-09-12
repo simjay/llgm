@@ -39,7 +39,7 @@ scope, negation, attribution and disagreements. Do not guess missing facts.
 Operations (use exactly the fields shown):
 {"op":"read","reference":<reference object>}
 {"op":"search","query":"text","k":5}
-{"op":"neighbors","node_id":"id","relation":null}
+{"op":"neighbors","node_id":"id"}
 {"op":"journal","node_id":"id"}
 {"op":"query_node","node_id":"id","question":"focused subquestion"}
 {"op":"delegate","question":"subquestion","references":[<reference objects>]}
@@ -102,7 +102,7 @@ def _refs(value):
 
 @dataclass
 class _FrameResult:
-    """A child or root return containing only declared citations and unresolved needs."""
+    """A child or main return containing only declared citations and unresolved needs."""
 
     answer: str
     citations: list[str] = field(default_factory=list)
@@ -114,15 +114,15 @@ class RecursiveRuntime:
 
     Child execution is sequential. All calls spend from one run ledger. Each
     instance permits one active answer, preventing accidental shared trace state.
-    Limits apply to every invocation, including root continuation. Cancellation
+    Limits apply to every invocation, including main continuation. Cancellation
     propagates. ``last_trace`` and ``last_usage`` retain attempted work. A failed
     run returns an explicit result, never an invented final answer.
     """
 
     def __init__(
         self,
-        root_model,
-        sidecar_model,
+        main_model,
+        reader_model,
         evidence,
         *,
         budget=None,
@@ -141,7 +141,7 @@ class RecursiveRuntime:
         ):
             if type(value) is not int or value < (0 if name == "max_depth" else 1):
                 raise ConfigurationError(f"Invalid {name}")
-        self.root_model, self.sidecar_model, self.evidence = root_model, sidecar_model, evidence
+        self.main_model, self.reader_model, self.evidence = main_model, reader_model, evidence
         self.budget = budget or Budget()
         self.max_depth, self.max_steps, self.max_operations = max_depth, max_steps, max_operations
         self.token_counter = token_counter or byte_token_bound
@@ -235,7 +235,7 @@ class _Execution:
         """Initialize isolated execution state while sharing limits across descendants."""
         self.runtime, self.query_date = runtime, query_date
         self.query_scope = query_scope or {}
-        self.ledger = RunLedger(runtime.budget, runtime.token_counter, reserve_root=True)
+        self.ledger = RunLedger(runtime.budget, runtime.token_counter, reserve_main=True)
         self.records: dict[str, dict] = {}
         self.record_keys: dict[str, str] = {}
         self.operations = 0
@@ -300,9 +300,7 @@ class _Execution:
         )
         instructions = _INSTRUCTIONS
         if not self.runtime.allow_neighbors:
-            instructions = instructions.replace(
-                '{"op":"neighbors","node_id":"id","relation":null}\n', ""
-            )
+            instructions = instructions.replace('{"op":"neighbors","node_id":"id"}\n', "")
             instructions += "\nThe neighbors operation is unavailable in this run. Search, read and journal access remain available.\n"
         messages = [
             Message("system", instructions),
@@ -322,7 +320,7 @@ class _Execution:
             ),
         ]
         visible: set[str] = set()
-        model = self.runtime.root_model if depth == 0 else self.runtime.sidecar_model
+        model = self.runtime.main_model if depth == 0 else self.runtime.reader_model
         for _ in range(self.runtime.max_steps):
             if self.operations >= self.runtime.max_operations:
                 raise BudgetExceeded("Operation allowance exhausted")
@@ -330,7 +328,7 @@ class _Execution:
             raw = await self.ledger.call(
                 model,
                 messages,
-                role="root" if depth == 0 else "sidecar",
+                role="main" if depth == 0 else "reader",
                 event_context={
                     "invocation_id": invocation_id,
                     "parent_id": parent_id,
@@ -352,7 +350,7 @@ class _Execution:
             allowed = {
                 "read": {"op", "reference"},
                 "search": {"op", "query", "k"},
-                "neighbors": {"op", "node_id", "relation"},
+                "neighbors": {"op", "node_id"},
                 "journal": {"op", "node_id"},
                 "query_node": {"op", "node_id", "question"},
                 "delegate": {"op", "question", "references"},
@@ -425,10 +423,7 @@ class _Execution:
             }
         if op["op"] == "neighbors":
             node_id = _node_id(op["node_id"])
-            relation = op["relation"]
-            if relation is not None:
-                relation = _text(relation, "relation")
-            refs = await self.tool(evidence.neighbors, node_id, relation=relation)
+            refs = await self.tool(evidence.neighbors, node_id)
             return {"references": [reference_to_dict(ref) for ref in refs]}
         if op["op"] == "journal":
             entries = await self.tool(evidence.journal, _node_id(op["node_id"]))

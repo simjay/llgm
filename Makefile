@@ -36,8 +36,8 @@ help:
 	  '  make test-data   Check pinned LongMemEval data already on disk' \
 	  '' \
 	  'Current LongMemEval pilot (explicit opt-in)' \
-	  '  make benchmark-prepare     Validate v6 inputs without model calls' \
-	  '  make benchmark-longmemeval Run v6 generation and judging (paid API calls and Docker)' \
+	  '  make benchmark-prepare     Validate current pilot inputs without model calls' \
+	  '  make benchmark-longmemeval Run pilot generation and judging (paid API calls and Docker)' \
 	  '    Set BENCHMARK_OUTPUT=NEW_DIRECTORY. Execution accepts ENV_FILE=.env.' \
 	  '' \
 	  'ColBERT development (remote commands can incur Modal charges)' \
@@ -47,7 +47,7 @@ help:
 	  '  make colbert-deploy   Deploy authenticated retrieval functions' \
 	  '  make colbert-shell    Open the GPU environment for debugging' \
 	  '' \
-	  'Historical experiment commands: experiments/README.md' \
+	  'Current benchmark instructions: experiments/README.md' \
 	  '' \
 	  'Overrides: PYTHON=python3 UV=uv PORT=8000 DOCS_BUILD_DIR=docs/_build/html'
 

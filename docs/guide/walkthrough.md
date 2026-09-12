@@ -42,7 +42,6 @@ async def main():
             await workspace.publish_edge(
                 database.node_id,
                 backups.node_id,
-                relation="backup_policy",
                 provenance=Provenance("user", "evidence-example"),
             )
             async with await Evidence.open(workspace) as evidence:
@@ -226,10 +225,10 @@ Follow these steps through its answer:
 2. Database's delegate reads its source with the journal amendment applied.
    Production now says MySQL, while staging still says SQLite. The replacement
    text points back to Update.
-3. Database follows its `deployment_registry` edge and asks a child to read
+3. Database follows its generic connection to Registry and asks a child to read
    Registry. The child returns eu-west-1 with its source reference.
 4. Backups returns the seven-day retention statement independently.
-5. The root combines the selected excerpts and findings into a cited answer.
+5. The main model combines the selected excerpts and findings into a cited answer.
 
 The script checks those behaviors, including that the original PostgreSQL
 statement remains readable. It removes its temporary workspace when done.
@@ -243,12 +242,12 @@ The following snippets show **code inside a delegate's interpreter**. LLGM
 provides the functions and `context` variable there. They are not standalone
 application scripts.
 
-An edge gives a delegate a relationship label and a target node. The example
-has an edge from Database to Registry labeled `deployment_registry`. A delegate
-can inspect that relation and ask its target a question:
+An edge gives a delegate a generic connection and a target node. The reader
+interprets why Database and Registry matter to the current question and can ask
+the target for more evidence:
 
 ```python
-links = edges(relation="deployment_registry")
+links = edges()
 for edge in links["edges"]:
     finding = query_node(
         edge["reference"]["node_id"],

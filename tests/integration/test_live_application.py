@@ -43,7 +43,7 @@ def live_application():
     if enabled != "1":
         pytest.fail("LLGM_TEST_APPLICATION must be exactly 0 or 1", pytrace=False)
     configurations = {}
-    for role in ("ROOT", "SIDECAR", "MAINTENANCE"):
+    for role in ("MAIN", "READER", "GRAPH"):
         prefix = f"LLGM_TEST_APPLICATION_{role}_"
         provider, model = (
             os.environ.get(prefix + key, "").strip() for key in ("PROVIDER", "MODEL")
@@ -170,7 +170,7 @@ def test_autonomous_memory_application(
         max_links_per_node=2,
         budget=Budget(
             max_model_calls=2,
-            max_sidecar_calls=2,
+            max_reader_calls=2,
             max_searches=2,
             max_context_tokens=65536,
             max_evidence_tokens=60000,
@@ -180,7 +180,7 @@ def test_autonomous_memory_application(
     )
     inference_budget = Budget(
         max_model_calls=16,
-        max_sidecar_calls=12,
+        max_reader_calls=12,
         max_searches=8,
         max_evidence_tokens=60000,
         max_bundle_tokens=24000,
@@ -218,9 +218,9 @@ def test_autonomous_memory_application(
                 }
                 app = LLGM(
                     workspace,
-                    clients["root"],
-                    clients["sidecar"],
-                    maintenance_model=clients["maintenance"],
+                    clients["main"],
+                    clients["reader"],
+                    graph_model=clients["graph"],
                     maintenance_policy=maintenance_policy,
                     inference_budget=inference_budget,
                     max_depth=3,
@@ -269,7 +269,9 @@ def test_autonomous_memory_application(
                 )
                 assert maintenance.usage["model_calls"] > 0
                 try:
-                    result = await app.answer(case.question, query_date=case.question_date, remember=False)
+                    result = await app.answer(
+                        case.question, query_date=case.question_date, remember=False
+                    )
                 finally:
                     record["operations"], record["usage"] = (
                         _safe_trace(app.last_trace),
@@ -333,14 +335,14 @@ def test_autonomous_memory_application(
                 entered = [
                     event
                     for event in result.trace
-                    if event.get("kind") == "enter" and event["parent_id"] == "root"
+                    if event.get("kind") == "enter" and event["parent_id"] == "main"
                 ]
                 assert {event["target_node_id"] for event in entered} == set(selection["selected"])
                 assert all(event["question"] == case.question for event in entered)
                 assert any(event.get("kind") == "python" for event in result.trace)
                 assert any(event.get("kind") == "repl_open" for event in result.trace)
                 calls = [event for event in result.trace if event.get("kind") == "model"]
-                assert sum(event["role"] == "root" for event in calls) == 1
+                assert sum(event["role"] == "main" for event in calls) == 1
                 assert all(
                     event["model"] == live_application[event["role"]]["model"] for event in calls
                 )
@@ -412,7 +414,7 @@ def test_controlled_application_updates_restart_and_scopes(
         max_links_per_node=2,
         budget=Budget(
             max_model_calls=2,
-            max_sidecar_calls=2,
+            max_reader_calls=2,
             max_searches=2,
             max_context_tokens=65536,
             max_output_tokens=2048,
@@ -421,7 +423,7 @@ def test_controlled_application_updates_restart_and_scopes(
     )
     budget = Budget(
         max_model_calls=12,
-        max_sidecar_calls=9,
+        max_reader_calls=9,
         max_searches=5,
         max_evidence_tokens=60000,
         max_bundle_tokens=24000,
@@ -485,9 +487,9 @@ def test_controlled_application_updates_restart_and_scopes(
             async with Workspace.open(tmp_path / "controlled-workspace") as workspace:
                 app = LLGM(
                     workspace,
-                    clients["root"],
-                    clients["sidecar"],
-                    maintenance_model=clients["maintenance"],
+                    clients["main"],
+                    clients["reader"],
+                    graph_model=clients["graph"],
                     maintenance_policy=policy,
                     inference_budget=budget,
                     max_depth=3,
@@ -516,7 +518,7 @@ def test_controlled_application_updates_restart_and_scopes(
                     "orion-service", "t", sources[0][1].index("Staging"), len(sources[0][1])
                 )
                 curated_edge = await workspace.publish_edge(
-                    "orion-runbook", "orion-service", relation="related_to", provenance=provenance
+                    "orion-runbook", "orion-service", provenance=provenance
                 )
                 record["curated_primary_edge_id"] = curated_edge.edge_id
                 original = await workspace.append_journal(
@@ -577,9 +579,9 @@ def test_controlled_application_updates_restart_and_scopes(
             async with Workspace.open(tmp_path / "controlled-workspace") as reopened:
                 app = LLGM(
                     reopened,
-                    clients["root"],
-                    clients["sidecar"],
-                    maintenance_model=clients["maintenance"],
+                    clients["main"],
+                    clients["reader"],
+                    graph_model=clients["graph"],
                     maintenance_policy=policy,
                     inference_budget=budget,
                     max_depth=3,
@@ -630,7 +632,8 @@ def test_controlled_application_updates_restart_and_scopes(
                             scope=case["scope"],
                             query_date=case["date"],
                             as_of_ms=case["as_of_ms"],
-                         remember=False)
+                            remember=False,
+                        )
                         attempt.update(
                             status=result.status,
                             answer=result.answer,

@@ -12,14 +12,15 @@ requirements and supported behavior.
 
 ## Product model
 
-A source node contains an original conversation. Passages provide stable spans
-into its turns. Primary edges connect related nodes. Per-node journals record
+A topic node contains append-only conversation turns. Related sessions can
+share a topic, and new turns preserve earlier span identities. Passages provide stable spans
+into its turns. Generic primary edges connect related nodes. Readers interpret their meaning. Per-node journals record
 explicit amendments while retaining the original evidence and append history.
 Edges and journals have separate responsibilities.
 
 By default, an answer starts by searching passages and selecting their distinct
-node owners. Sidecar-model delegates inspect the admitted nodes and can query
-related nodes recursively. Their selected findings and evidence go to one final root-model
+node owners. Reader-model delegates inspect the admitted nodes and can query
+related nodes recursively. Their selected findings and evidence go to one final main-model
 call. The persistent graph represents evidence relationships. It does not define
 probabilistic factors or guarantee convergence.
 
@@ -32,9 +33,18 @@ The [agent code map](ARCHITECTURE.md) points to the implementation.
 - `LLGM` is the product entry point. `from_settings()` constructs and owns its
   configured resources, reading environment settings at context entry when no
   `Settings` object is passed. Direct construction accepts caller-owned resources.
-- Application ingestion accepts plain text, chat turn sequences, or an explicit
-  `Conversation`. Plain text becomes one user turn. The application normalizes
-  these inputs before storage, preserving text and existing retry semantics.
+- `answer()` is the primary conversational API. It saves new user turns and
+  nonempty assistant replies, persists the active topic per conversation ID,
+  and conservatively routes clear topic changes. `remember=False` queries
+  without writing. Routing and inference share an answer allowance.
+- `ingest()` catches up on earlier batches. Related sessions can reuse a topic.
+  It routes each batch as one unit. An explicit Conversation.node_id retains
+  the exact import path. Retry keys protect imported batches.
+- Schema 5 stores appended turns separately and pages their coordinates.
+  Span reads load one appended turn. Explicit imports and legacy base blobs
+  still load whole base sources. Schema 3 requires an explicit copy.
+- Primary connections have no relationship type field. Journals retain
+  explicit amendment semantics. Model topic and connection quality is unmeasured.
 - Local SQLite metadata and BM25 search are the default. S3 can hold source
   blobs. This does not make the metadata database distributed.
 - Official ColBERTv2 with PLAID and other retrievers use optional adapters.
@@ -42,6 +52,9 @@ The [agent code map](ARCHITECTURE.md) points to the implementation.
 - Model generation can use native OpenAI, Anthropic, or configured compatible
   endpoints. SDKs stay in adapters. Full node inference uses Docker for generated
   Python while model calls and evidence access run on the host.
+- Model roles are Main, Reader, and Graph. Constructors and settings use
+  main_model, reader_model, and graph_model. Reader and graph call budgets and
+  trace roles stay separate. Graph maintenance remains the process name.
 - Settings accept environment variables, TOML, and Python overrides. Environment
   files must be loaded explicitly. Provider credentials are not settings values.
 - Current reads can observe new appends. They do not provide a workspace snapshot.

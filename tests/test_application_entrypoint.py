@@ -33,7 +33,13 @@ class ApplicationEntryPointTests(unittest.IsolatedAsyncioTestCase):
         self.path = Path(self.temp.name)
         self.workspace = await Workspace.open(self.path / "inputs").__aenter__()
         self.model = ScriptedModelClient([])
-        self.app = LLGM(self.workspace, self.model, self.model, maintenance_policy=MaintenancePolicy(mode="disabled"))
+        self.app = LLGM(
+            self.workspace,
+            self.model,
+            self.model,
+            graph_model=None,
+            maintenance_policy=MaintenancePolicy(mode="disabled"),
+        )
 
     async def asyncTearDown(self):
         """Close storage before removing temporary source files."""
@@ -63,7 +69,10 @@ class ApplicationEntryPointTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(container=type(sequence).__name__):
                 outcome = await self.app.ingest(sequence, organize=False)
                 source = await self.workspace.source(outcome.source.node_id)
-                self.assertEqual([(t.role, t.text) for t in source.turns[-3:]], [(t.role, t.text) for t in expected.turns])
+                self.assertEqual(
+                    [(t.role, t.text) for t in source.turns[-3:]],
+                    [(t.role, t.text) for t in expected.turns],
+                )
 
     async def test_conversation_preserves_source_identity_metadata_and_timestamp(self):
         """Existing Conversation inputs retain every explicit source field."""
@@ -117,11 +126,12 @@ class ApplicationEntryPointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_default_settings_capture_environment_on_context_entry(self):
         """Deferred context entry selects current settings once and closes owned resources."""
-        clients = [OwnedClient(), OwnedClient()]
+        clients = [OwnedClient(), OwnedClient(), OwnedClient()]
         environment = {
             "LLGM_WORKSPACE_PATH": str(self.path / "configured"),
-            "LLGM_ROOT_MODEL": "before-entry",
-            "LLGM_SIDECAR_MODEL": "before-entry",
+            "LLGM_MAIN_MODEL": "before-entry",
+            "LLGM_READER_MODEL": "before-entry",
+            "LLGM_GRAPH_MODEL": "maintainer-at-entry",
         }
         with (
             patch.dict(os.environ, environment, clear=True),
@@ -129,12 +139,12 @@ class ApplicationEntryPointTests(unittest.IsolatedAsyncioTestCase):
         ):
             context = LLGM.from_settings()
             self.assertFalse((self.path / "configured").exists())
-            os.environ["LLGM_ROOT_MODEL"] = "root-at-entry"
-            os.environ["LLGM_SIDECAR_MODEL"] = "reader-at-entry"
+            os.environ["LLGM_MAIN_MODEL"] = "main-at-entry"
+            os.environ["LLGM_READER_MODEL"] = "reader-at-entry"
             async with context as memory:
-                os.environ["LLGM_ROOT_MODEL"] = "changed-after-entry"
+                os.environ["LLGM_MAIN_MODEL"] = "changed-after-entry"
                 await memory.ingest("Persisted through the simple entry point.", organize=False)
-                self.assertEqual(create.call_args_list[0].args, ("openai", "root-at-entry"))
+                self.assertEqual(create.call_args_list[0].args, ("openai", "main-at-entry"))
                 self.assertEqual(create.call_args_list[1].args, ("openai", "reader-at-entry"))
         self.assertTrue(all(client.closed for client in clients))
         with self.assertRaises(ConfigurationError):
@@ -144,11 +154,15 @@ class ApplicationEntryPointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_explicit_settings_bypass_process_environment(self):
         """Explicit settings remain usable even when unrelated environment settings are invalid."""
-        clients = [OwnedClient(), OwnedClient()]
+        clients = [OwnedClient(), OwnedClient(), OwnedClient()]
         settings = Settings(
             workspace_path=str(self.path / "explicit"),
-            root_model="explicit-root",
-            sidecar_model="explicit-reader",
+            main_model="explicit-main",
+            reader_model="explicit-reader",
+            graph_model="explicit-maintainer",
+            graph_provider="openai_compatible",
+            graph_base_url="https://maintenance.example/v1",
+            graph_api_key_env="MAINTENANCE_KEY",
         )
         with (
             patch.dict(os.environ, {"LLGM_UNKNOWN_SETTING": "invalid"}, clear=True),
@@ -156,8 +170,16 @@ class ApplicationEntryPointTests(unittest.IsolatedAsyncioTestCase):
         ):
             async with LLGM.from_settings(settings) as memory:
                 await memory.ingest("Explicit configuration.", organize=False)
-                self.assertEqual(create.call_args_list[0].args, ("openai", "explicit-root"))
+                self.assertEqual(create.call_args_list[0].args, ("openai", "explicit-main"))
                 self.assertEqual(create.call_args_list[1].args, ("openai", "explicit-reader"))
+                self.assertEqual(
+                    create.call_args_list[2].args, ("openai_compatible", "explicit-maintainer")
+                )
+                self.assertEqual(
+                    create.call_args_list[2].kwargs["base_url"], "https://maintenance.example/v1"
+                )
+                self.assertEqual(create.call_args_list[2].kwargs["api_key_env"], "MAINTENANCE_KEY")
+                self.assertIs(memory.graph_model, clients[2])
 
     async def test_default_settings_still_require_model_ids_before_io(self):
         """Omitting settings never invents model choices or opens unconfigured resources."""
@@ -171,3 +193,12 @@ class ApplicationEntryPointTests(unittest.IsolatedAsyncioTestCase):
                     self.fail("Missing model IDs must fail before context entry")
             opening.assert_not_called()
             creating.assert_not_called()
+
+    async def test_missing_graph_model_fails_before_opening_resources(self):
+        """A configured reader cannot silently substitute for an unspecified maintainer."""
+        settings = Settings(main_model="main", reader_model="reader")
+        with patch("llgm.llgm.Workspace.open") as opening:
+            with self.assertRaisesRegex(ConfigurationError, "graph_model"):
+                async with LLGM.from_settings(settings):
+                    self.fail("Missing maintenance configuration must be rejected")
+            opening.assert_not_called()

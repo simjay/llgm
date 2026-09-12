@@ -1,8 +1,7 @@
 # Quickstart
 
-Start with one note and one question. Then add a conversation and inspect the
-text behind an answer. LLGM handles storage, search, and the model calls between
-those steps.
+Start a conversation with `answer()`. LLGM saves new turns, keeps related
+discussion in one topic node, and retrieves evidence for follow-up questions.
 
 You need Python 3.11 or later, Git, Docker, and an OpenAI API key with access to
 the models you select. The shell commands below use Bash or Zsh.
@@ -53,25 +52,29 @@ example. Replace every value inside angle brackets with your own value:
 
 ```sh
 export OPENAI_API_KEY='<your OpenAI API key>'
-export LLGM_ROOT_MODEL='<model ID for writing the answer>'
-export LLGM_SIDECAR_MODEL='<model ID for reading evidence>'
+export LLGM_MAIN_MODEL='<model ID for writing the answer>'
+export LLGM_READER_MODEL='<model ID for reading evidence>'
+export LLGM_GRAPH_MODEL='<small model ID for organizing topics>'
 ```
 
-The **root model** combines findings into the final answer. The **sidecar model**
-reads sources, follows related evidence, and helps organize new conversations.
-You can use the same model ID for both roles. If you choose a smaller sidecar,
+The **main model** combines findings into the final answer. The **reader model**
+reads sources and follows related evidence. The **graph model** chooses
+whether to append to an existing topic or start a clearly different one, and
+proposes generic connections. You can use the same model ID for multiple roles.
+If you choose a smaller reader,
 it still needs to follow the reading instructions and produce Python reliably.
 
 Use actual API model IDs available to your account. LLGM has no default model
 IDs and does not replace these placeholders for you. The example uses the
-default `openai` provider for both roles. If you already configured another
-provider, set `LLGM_ROOT_PROVIDER=openai` and `LLGM_SIDECAR_PROVIDER=openai`.
+default `openai` provider for all three roles. If you already configured another
+provider, set `LLGM_MAIN_PROVIDER=openai`, `LLGM_READER_PROVIDER=openai`,
+and `LLGM_GRAPH_PROVIDER=openai`.
 
 Environment variables apply to the current shell. For a local `.env` file,
 follow [explicit environment-file loading](configuration.md#local-environment-file).
 LLGM does not discover or load that file automatically.
 
-## 4. Store evidence and ask a question
+## 4. Start a conversation
 
 Save this as `quickstart.py`:
 
@@ -82,10 +85,10 @@ from llgm import LLGM
 
 
 async def main():
-    """Save a note and ask a question about it."""
+    """Continue a conversation with automatic memory."""
     async with LLGM.from_settings() as memory:
-        await memory.ingest("Atlas production uses PostgreSQL.")
-        result = await memory.answer("Which database does Atlas production use?")
+        await memory.answer("Atlas production uses PostgreSQL.", conversation_id="atlas")
+        result = await memory.answer("Which database does it use?", conversation_id="atlas")
         print(result.answer)
 
 
@@ -98,25 +101,42 @@ Run it from the activated environment:
 python quickstart.py
 ```
 
-The answer should identify PostgreSQL. Its exact wording depends on the models.
-Ingestion can call a model to find relationships, and answering makes hosted
-model calls to read and combine evidence.
+The answer should identify PostgreSQL. Each call saves your new message and the
+returned assistant text. The same `conversation_id` resumes the active topic
+across calls and application restarts. Its default is `"default"`.
 
-`from_settings()` reads the environment configured above when the block opens.
-`ingest()` stores the string as one user message. `answer()` searches stored
-evidence and returns the model's answer with its references. You can pass an
-explicit `Settings` object later when you need configuration in Python.
+LLGM asks its organizing model whether a message continues the active topic,
+returns to a retrieved topic, or clearly starts a different topic. Follow-ups,
+corrections, subtopics, time gaps and large histories should stay together.
+The model sees bounded routing previews. Its judgment can be wrong. There is
+no size-triggered splitting or fixed target node size.
 
-Your data stays in `./memory` after the script finishes. Run from the same working
-directory to reuse it, or set `LLGM_WORKSPACE_PATH` to choose another location.
-The `async with` block closes the workspace and model clients when it ends.
-`asyncio.run(main())` starts this standalone program. In an async application,
-use the same memory block inside your existing async function.
+`from_settings()` reads configuration when the block opens and closes owned
+clients when it ends. Data stays in `./memory`, or the location selected by
+`LLGM_WORKSPACE_PATH`. History is stored locally. Evidence presented to hosted
+models is sent to their provider.
 
-## 5. Add more conversations
+## 5. Send messages or catch up on earlier history
 
-You can pass a complete chat as a list of messages. Put the following calls
-inside the memory block, replacing the single-note example:
+You may send new messages as text or as role/content records:
+
+```python
+result = await memory.answer(
+    [{"role": "user", "content": "Keep its backups for seven days."}],
+    conversation_id="atlas",
+)
+print(result.answer)
+print(result.node_id)
+```
+
+Send only new turns. Do not resend the complete transcript on each answer call.
+The list must end with a nonempty user message and accepts user and assistant
+roles. System instructions, tools, streaming and multimodal input are not part
+of this application interface. It returns `AnswerResult`, not a provider SDK
+response. General conversation can produce a reply without citations. Personal
+memory claims should be supported by the stored evidence.
+
+Use `ingest()` when catching up on conversations that happened elsewhere:
 
 ```python
 outcome = await memory.ingest(
@@ -125,31 +145,46 @@ outcome = await memory.ingest(
         {"role": "assistant", "content": "How long should its backups be kept?"},
         {"role": "user", "content": "Keep them for seven days."},
     ],
-    idempotency_key="atlas-backup-conversation",
+    conversation_id="atlas",
+    idempotency_key="atlas-backup-import",
 )
-result = await memory.answer("How long do we keep Atlas production backups?")
-print(result.answer)
 ```
 
-Every call stores one conversation as an immutable source node. Plain text is a
-shortcut for a single user turn. Message lists preserve the roles and text you
-provide. Use `Conversation.from_turns()` when you also want to attach source
-metadata, a timestamp, or your own node ID.
+An imported batch is routed as one unit. Related batches can share a node even
+when they came from different sessions. LLGM preserves their exact text, roles
+and per-turn source dates. Automatic splitting inside an imported batch is not
+implemented. `Conversation.from_turns()` accepts source metadata and timestamps.
+An explicit `Conversation.node_id` requests an exact immutable source import
+and bypasses topic routing.
 
-The first example creates another note each time it runs. An `idempotency_key`,
-as used in the chat example, lets a retry reuse the same saved source. Use a new
-key for new content. Reusing a key with changed content raises a conflict.
+An ingestion retry key reuses the saved batch. Changed content under the same
+key raises a conflict. `answer()` treats repeated calls as new messages and does
+not provide response replay or automatic retries. Stored input survives an
+inference failure. Only a nonempty returned reply is appended as assistant text.
+Calls sharing a Workspace object serialize conversation updates. Applications
+using independent workspace handles must serialize a shared chat themselves.
 
-Maintenance looks for relationships to existing nodes and may run again on a
-retry. A failed maintenance step does not remove the stored source. The
-[configuration guide](configuration.md) explains how to review or disable
-automatic maintenance.
+Routing and answer generation share the answer budget. Generic connection
+maintenance runs for newly created answer topics with its separate allowance,
+reported under `result.usage["maintenance"]`. Imports report routing usage under
+`outcome.maintenance.usage["topic_routing"]`. Maintenance failure does not undo
+stored evidence. `organize=False` skips import connection discovery but still
+routes the batch. `MaintenancePolicy(mode="disabled")` also disables model topic
+routing and keeps appending to that conversation's active node.
 
-`answer()` searches the stored conversations and sends the selected nodes to
-readers called *node delegates*. Their findings go to the root model for the
-final answer. If you already know where to start, pass
-`node_id=outcome.source.node_id` to skip the initial search. That reader can
-still search or follow links for more evidence.
+For a read-only memory question:
+
+```python
+result = await memory.answer("Which database does Atlas use?", remember=False)
+```
+
+This leaves stored conversation history unchanged. Add `node_id` in read-only
+mode to choose the starting node explicitly. Conversation answers always include
+the active topic among their bounded initial readers, which helps resolve
+follow-ups such as "what about that?".
+
+Existing schema-3 workspaces require an explicit copy before opening them with
+this version. See [workspace migration](configuration.md#storage-choices).
 
 ## Understand the result
 
@@ -171,7 +206,7 @@ identifies Atlas production.
 
 | Status | Meaning |
 | --- | --- |
-| `completed` | The root returned an answer with no reported unresolved evidence. |
+| `completed` | The main model returned an answer with no reported unresolved evidence. |
 | `partial` | The result records missing evidence, a skipped or failed branch, or an empty initial search. |
 | `budget_exhausted` | A resource limit stopped the run without a final answer. |
 | `failed` | An error handled by the inference runtime stopped the run without a final answer. |
@@ -186,7 +221,7 @@ cancellation can raise exceptions instead of returning a status.
 
 | Problem | What to check |
 | --- | --- |
-| Model IDs are missing | Export both `LLGM_ROOT_MODEL` and `LLGM_SIDECAR_MODEL` before starting Python. |
+| Model IDs are missing | Export `LLGM_MAIN_MODEL`, `LLGM_READER_MODEL`, and `LLGM_GRAPH_MODEL` before starting Python. |
 | Authentication or model-access error | Check the API key, model IDs, and access for that provider account. |
 | Docker cannot start an interpreter | Start Docker and confirm that `python:3.12-slim` is available locally. |
 | A rerun reports an ingestion conflict | Keep the original note unchanged or assign a new idempotency key to changed content. |

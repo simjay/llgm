@@ -89,7 +89,7 @@ python -m pip install 'llgm[openai] @ git+https://github.com/simjay/llgm.git'
 ```
 
 Start Docker, prepare the `python:3.12-slim` image, and set `OPENAI_API_KEY`,
-`LLGM_ROOT_MODEL`, and `LLGM_SIDECAR_MODEL`. The
+`LLGM_MAIN_MODEL`, `LLGM_READER_MODEL`, and `LLGM_GRAPH_MODEL`. The
 [Quickstart](https://llgm.readthedocs.io/en/latest/guide/quickstart.html) gives the
 setup commands. Then save this as `quickstart.py` and run `python quickstart.py`:
 
@@ -102,7 +102,7 @@ from llgm import LLGM
 async def main():
     """Save a note and ask a question about it."""
     async with LLGM.from_settings() as memory:
-        await memory.ingest("Atlas production uses PostgreSQL.")
+        await memory.answer("Atlas production uses PostgreSQL.")
         result = await memory.answer("Which database does Atlas production use?")
         print(result.answer)
 
@@ -113,7 +113,7 @@ asyncio.run(main())
 That is the application flow: open memory, add evidence, ask a question.
 The block closes its connections and keeps the saved evidence in `./memory`.
 Ingestion and answering can make hosted model calls. Pass a chat message list
-to `ingest()` when you have a complete conversation. The
+to `answer()` for new turns. Use `ingest()` to catch up on earlier conversations. The
 [Quickstart](https://llgm.readthedocs.io/en/latest/guide/quickstart.html) also shows
 how to avoid duplicate ingestion and inspect the answer's sources.
 

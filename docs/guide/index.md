@@ -23,8 +23,8 @@ See the [reference](../reference/index.md) for signatures and capability limits.
 
 These scripts show a complete program around the examples in the guides:
 
-- {download}`recursive_memory.py <../../examples/recursive_memory.py>` stores two
-  related notes and answers a question with your configured models. It needs the
+- {download}`recursive_memory.py <../../examples/recursive_memory.py>` continues a
+  persistent conversation and answers a follow-up with your configured models. It needs the
   provider setup and Docker image from Quickstart.
 - {download}`offline.py <../../examples/offline.py>` demonstrates two starting
   nodes, a recursive child, and a source correction. It uses scripted model

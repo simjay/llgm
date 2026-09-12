@@ -445,12 +445,10 @@ class QueryEvidence:
         """Expose raw retained history for inspection, separate from local operational state."""
         return await self.evidence.journal(node_id)
 
-    async def edge_descriptions(
-        self, node_id: str, relation: str | None = None
-    ) -> list[dict[str, Any]]:
-        """Describe applicable primary edges without losing relation or provenance metadata."""
+    async def edge_descriptions(self, node_id: str) -> list[dict[str, Any]]:
+        """Describe applicable primary edges with provenance metadata."""
         await self.initialize_node(node_id)
-        edges = await self.evidence.edge_descriptions(node_id, relation)
+        edges = await self.evidence.edge_descriptions(node_id)
         descriptions = []
         for edge in edges:
             status, _ = match_applicability(
@@ -460,9 +458,9 @@ class QueryEvidence:
                 descriptions.append(edge)
         return descriptions
 
-    async def neighbors(self, node_id: str, relation: str | None = None) -> list[EvidenceRef]:
+    async def neighbors(self, node_id: str) -> list[EvidenceRef]:
         """Return applicable primary neighbors. Semantic journal pointers never add adjacency."""
-        descriptions = await self.edge_descriptions(node_id, relation)
+        descriptions = await self.edge_descriptions(node_id)
         return [
             NodeRef(node)
             for node in sorted({edge["reference"]["node_id"] for edge in descriptions})

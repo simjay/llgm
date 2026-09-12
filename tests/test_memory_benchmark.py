@@ -11,6 +11,7 @@ import pytest
 
 from llgm import LLGM, Workspace
 from llgm.core.errors import ConfigurationError
+from llgm.core.types import SourceSpan
 from llgm.evaluation.artifacts import write_json
 from llgm.evaluation.costs import Allowance
 from llgm.evaluation.memory_benchmark import ingest_history, prepare, report, run_trial, summarize
@@ -67,7 +68,9 @@ def pinned_history(tmp_path):
     judge = tmp_path / "judge.py"
     judge.write_text("# A checksum-only fixture; preparation must not execute it.\n")
     protocol = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "models": {role: f"test-{role}" for role in ("main", "reader", "graph", "judge")},
+        "pricing": {role: {} for role in ("main", "reader", "graph", "judge")},
         "repetitions": 1,
         "claim": "synthetic-development",
         "arms": ["llgm", "bm25"],
@@ -318,29 +321,47 @@ def test_ingest_history_preserves_occurrences_roles_dates_and_no_question(pinned
     async def scenario():
         """Exercise the real workspace and facade with generation replaced only at its boundary."""
         main = ScriptedModelClient([])
-        maintenance = ScriptedModelClient(['{"links": []}'] * 3)
+
+        requests = []
+
+        async def route(request):
+            """Keep these related fixture sessions in one topic."""
+            requests.append(request)
+            payload = json.loads(request.messages[-1].content)
+            return ModelResponse(
+                json.dumps({"node_id": payload["active_node_id"], "reason": "Same topic"})
+            )
+
+        maintenance = CallableModelClient(route)
         async with Workspace.open(root / "workspace") as workspace:
-            app = LLGM(workspace, main, main, maintenance_model=maintenance)
+            app = LLGM(workspace, main, main, graph_model=maintenance)
             stored, outcomes = await ingest_history(app, sources, organize=organize)
             assert len(stored) == len(outcomes) == 3
-            assert len(set(await workspace.source_ids())) == 3
-            assert len({source.node_id for source in stored}) == 3
+            assert len(set(await workspace.source_ids())) == (1 if organize else 3)
+            assert len({source.node_id for source in stored}) == (1 if organize else 3)
             assert not {source.node_id for source in stored} & {
                 source.node_id for source in sources
             }
             for expected, actual in zip(sources, stored):
-                persisted = await workspace.source(actual.node_id)
                 UUID(actual.node_id)
-                assert persisted.turns == expected.turns
-                assert persisted.metadata == expected.metadata
-                assert persisted.timestamp_ms == expected.timestamp_ms
-            assert stored[0].turns == stored[1].turns
+                assert [(t.role, t.text) for t in actual.turns] == [
+                    (t.role, t.text) for t in expected.turns
+                ]
+                assert actual.metadata == expected.metadata
+                assert actual.timestamp_ms == expected.timestamp_ms
+                for turn in actual.turns:
+                    resolved = await workspace.resolve(
+                        SourceSpan(actual.node_id, turn.turn_id, 0, len(turn.text))
+                    )
+                    assert resolved.text == turn.text
+                    assert resolved.metadata["source_metadata"] == expected.metadata
+            assert [t.text for t in stored[0].turns] == [t.text for t in stored[1].turns]
             assert stored[0].metadata["date"] != stored[1].metadata["date"]
             assert [turn.role for turn in stored[0].turns] == ["user", "assistant"]
         assert not main.requests
-        assert bool(maintenance.requests) is organize
+        assert bool(requests) is organize
         assert all(row["status"] == ("completed" if organize else "disabled") for row in outcomes)
-        payload = json.dumps([asdict(request) for request in maintenance.requests])
+        payload = json.dumps([asdict(request) for request in requests])
         for hidden in (
             "QUESTION_ONLY",
             "EVALUATOR_GOLD_ONLY",
@@ -370,17 +391,20 @@ def test_ingest_cancellation_retains_prior_maintenance_outcomes(pinned_history):
             requests.append(request)
             if len(requests) == 2:
                 raise asyncio.CancelledError()
-            return ModelResponse('{"links": []}')
+            payload = json.loads(request.messages[-1].content)
+            return ModelResponse(
+                json.dumps({"node_id": payload["active_node_id"], "reason": "Same topic"})
+            )
 
         outcomes = []
         async with Workspace.open(root / "workspace") as workspace:
-            app = LLGM(workspace, main, main, maintenance_model=CallableModelClient(respond))
+            app = LLGM(workspace, main, main, graph_model=CallableModelClient(respond))
             with pytest.raises(asyncio.CancelledError):
                 await ingest_history(app, cases[0].sources, organize=True, maintenance=outcomes)
             assert len(outcomes) == 2
             assert all(row["status"] == "completed" for row in outcomes)
-            assert len(await workspace.source_ids()) == 3
-            assert app.last_maintenance.status == "cancelled"
+            assert len(await workspace.source_ids()) == 1
+            assert app.last_maintenance.status == "completed"
         assert not main.requests
 
     asyncio.run(scenario())
@@ -412,14 +436,14 @@ def test_report_recovers_interrupted_trial_calls_without_double_counting(tmp_pat
     folder = _report_fixture(tmp_path)
     known = {
         "call_id": "known",
-        "role": "maintenance",
+        "role": "graph",
         "status": "completed",
         "estimated_cost_usd": 0.2,
         "reserved_cost_usd": 0.5,
     }
     pending = {
         "call_id": "pending",
-        "role": "root",
+        "role": "main",
         "status": "dispatched",
         "estimated_cost_usd": None,
         "reserved_cost_usd": 0.7,
@@ -494,11 +518,11 @@ def test_failed_query_preserves_phase_latency_and_call_identity(
     protocol_path = Path(__file__).resolve().parents[1] / "experiments/longmemeval_smoke.json"
     protocol = json.loads(protocol_path.read_text())
     if effort is not None:
-        protocol["root_reasoning_effort"] = effort
+        protocol["main_reasoning_effort"] = effort
 
     async def scenario():
         """Use ordinary ingestion and failure accounting without a provider or Docker."""
-        clients = {role: ScriptedModelClient([]) for role in ("root", "sidecar", "maintenance")}
+        clients = {role: ScriptedModelClient([]) for role in ("main", "reader", "graph")}
         folder = root / "failed-trial"
         record = await run_trial(cases[0], "bm25", protocol, folder, clients, Allowance(1))
         assert record["status"] == "failed" and record["failed_phase"] == "query"
@@ -510,6 +534,33 @@ def test_failed_query_preserves_phase_latency_and_call_identity(
         assert call["estimated_cost_usd"] is None
         expected_temperature = None if effort is not None else 0
         assert call["request"]["temperature"] == expected_temperature
-        assert clients["root"].requests[-1].temperature == expected_temperature
+        assert clients["main"].requests[-1].temperature == expected_temperature
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("section", ["models", "pricing"])
+@pytest.mark.parametrize(
+    "old,new", [("root", "main"), ("sidecar", "reader"), ("maintenance", "graph")]
+)
+def test_legacy_benchmark_role_keys_fail_before_dataset_reads(
+    pinned_history, monkeypatch, section, old, new
+):
+    """A partly renamed protocol cannot attribute a provider call to the wrong role or price."""
+    from llgm.evaluation import memory_benchmark
+
+    protocol, root = pinned_history
+    protocol[section][old] = protocol[section].pop(new)
+    monkeypatch.setattr(
+        memory_benchmark, "digest", lambda path: pytest.fail("Must validate role keys before I/O")
+    )
+    with pytest.raises(ConfigurationError, match="models and pricing"):
+        prepare(protocol, root)
+
+
+def test_legacy_benchmark_protocol_requires_explicit_update(pinned_history):
+    """Renamed role dictionaries cannot masquerade as the earlier protocol version."""
+    protocol, root = pinned_history
+    protocol["schema_version"] = 1
+    with pytest.raises(ConfigurationError, match="version-2"):
+        prepare(protocol, root)

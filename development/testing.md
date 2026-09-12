@@ -20,7 +20,7 @@ contracts are:
 
 | Area | What the tests protect |
 | --- | --- |
-| Storage and journals | Exact Unicode spans, immutable nodes, restart, idempotency, concurrent publication, scoped and timed amendments, canonical replacements, and explicit missing-target failures. |
+| Storage and journals | Exact Unicode spans, append-only topic nodes, restart, idempotency, concurrent publication, scoped and timed amendments, canonical replacements, and explicit missing-target failures. |
 | Retrieval and graph | Reusable indexes, current-write visibility, independent primary edges, withdrawal, canonical retrieval references, and bounded source metadata. |
 | Node inference | All admitted seeds are scheduled. Children have isolated context. Only delivered, selected evidence can be cited. Budgets reserve finalization, and failures or cancellation retain admitted findings and close interpreters. |
 | Application and adapters | Resource ownership, maintenance accounting, configuration precedence, provider schemas, refusals, truncation, and known versus unknown usage. |
@@ -91,7 +91,7 @@ Use an already available trusted Python image and a running daemon:
 ```bash
 LLGM_TEST_DOCKER=1 LLGM_REPL_DOCKER_IMAGE=YOUR_LOCAL_PINNED_IMAGE \
   .venv/bin/python -m pytest tests/test_repl_docker.py \
-  tests/test_seed_answers.py -m docker -q
+  tests/test_conversations.py -q
 ```
 
 These tests use real containers with deterministic model decisions. They check
@@ -155,12 +155,12 @@ variable under the listed prefix, plus that provider's credential:
 
 | Test file under `tests/integration/` | Gates | Model setting prefix and roles | Additional inputs |
 | --- | --- | --- | --- |
-| `test_live_application.py` | `LLGM_TEST_APPLICATION=1`, `LLGM_TEST_DOCKER=1` | `LLGM_TEST_APPLICATION_`: `ROOT`, `SIDECAR`, `MAINTENANCE` | Local dataset and `LLGM_REPL_DOCKER_IMAGE` |
-| `test_live_recursive.py` | `LLGM_TEST_RECURSIVE=1` | `LLGM_TEST_RECURSIVE_`: `ROOT`, `SIDECAR` | Local dataset and prescribed oracle source handles |
-| `test_live_rlm.py` | `LLGM_TEST_RLM=1`, `LLGM_TEST_DOCKER=1` | `LLGM_TEST_RLM_`: `ROOT`, `CHILD` | `LLGM_REPL_DOCKER_IMAGE` and prescribed external-context protocol |
+| `test_live_application.py` | `LLGM_TEST_APPLICATION=1`, `LLGM_TEST_DOCKER=1` | `LLGM_TEST_APPLICATION_`: `MAIN`, `READER`, `GRAPH` | Local dataset and `LLGM_REPL_DOCKER_IMAGE` |
+| `test_live_recursive.py` | `LLGM_TEST_RECURSIVE=1` | `LLGM_TEST_RECURSIVE_`: `MAIN`, `READER` | Local dataset and prescribed oracle source handles |
+| `test_live_rlm.py` | `LLGM_TEST_RLM=1`, `LLGM_TEST_DOCKER=1` | `LLGM_TEST_RLM_`: `MAIN`, `READER` | `LLGM_REPL_DOCKER_IMAGE` and prescribed external-context protocol |
 
-For example, the application root uses
-`LLGM_TEST_APPLICATION_ROOT_PROVIDER` and `LLGM_TEST_APPLICATION_ROOT_MODEL`.
+For example, the application main model uses
+`LLGM_TEST_APPLICATION_MAIN_PROVIDER` and `LLGM_TEST_APPLICATION_MAIN_MODEL`.
 These are manual compatibility diagnostics. Their results do not replace the
 LongMemEval evaluation below.
 
@@ -191,7 +191,7 @@ Use the same retained question and exact source spans to distinguish these stage
 | Seed admission | Was that node among the admitted seeds, or explicitly skipped by the cap? |
 | Local inspection | Did its delegate actually read the relevant turn and value? |
 | Branch return | Did the branch select that evidence and return the supported fact? |
-| Root synthesis | Did the root use the returned facts correctly and cite all necessary evidence? |
+| Main synthesis | Did the main model use the returned facts correctly and cite all necessary evidence? |
 | Execution | Did a model, budget, callback, or cleanup failure interrupt any of these stages? |
 
 Source annotations can include redundant or older evidence. Complete annotated

@@ -6,8 +6,8 @@ contract and tests together. Open choices belong in [remaining tasks](REMAINING_
 
 ## D01: Preserve original evidence
 
-Source nodes are immutable. A passage reference identifies a node, turn, and
-character span. New information gets a new source node. Explicit journal patches
+Source turns are immutable. A passage reference identifies a node, turn, and
+character span. New related information appends to the existing topic node. Explicit journal patches
 can change an effective read without changing the original source.
 
 This keeps citations inspectable after corrections. Derived search chunks are
@@ -17,7 +17,8 @@ not a second source of truth. See [evidence records](../src/llgm/core/types.py),
 
 ## D02: Separate links from amendments
 
-Primary edges describe relationships between nodes. Journals describe assertions
+Primary edges record generic connections between nodes. RLM readers interpret
+their relationship for the current question. Edges have no relationship type field. Journals describe assertions
 and amendments local to a node. Automatic maintenance proposes and validates
 edges. It does not automatically decide which source text should be overwritten.
 
@@ -32,11 +33,11 @@ append order govern applicable overwrites. See
 The application selects distinct node owners from ranked passages before
 delegate generation. It dispatches all admitted seeds with bounded concurrency.
 Each delegate may read, search, inspect links, and start recursive children.
-Only selected findings and evidence return to the parent or final root.
+Only selected findings and evidence return to the parent or final main.
 
 This keeps full source text and child conversation history out of a shared
 prompt. Concurrency queues admitted work rather than silently dropping it.
-The integrated path ends with one root synthesis call, with no further root tool
+The integrated path ends with one main synthesis call, with no further main tool
 phase. See [node execution](../src/llgm/inference/nodes.py) and
 [node search](../docs/guide/node-search.md).
 
@@ -98,3 +99,44 @@ resource factory and one storage contract. Exact text, role attribution,
 idempotency, maintenance behavior, and resource cleanup remain unchanged. See
 [application entry-point tests](../tests/test_application_entrypoint.py) and the
 [quickstart](../docs/guide/quickstart.md).
+
+## D09: Conversation first with conservative topic growth
+
+`answer()` persists incoming turns and nonempty replies. A stable conversation
+ID resumes its active topic. The routing model prefers continuation, can return
+to a retrieved topic, and creates a node only on a clear topic change. Size,
+new sessions and subtopics do not independently justify a split. No automatic
+size cap or within-import-batch segmentation is implemented.
+
+Schema 5 stores appended turns as separate immutable blobs, preserving spans
+without rewriting history. Coordinate pages avoid loading appended text.
+A span loads one turn, while full-source reads remain explicitly materializing.
+Schema 3 requires an explicit copying migration. Calls sharing a Workspace
+serialize conversation mutation. Independent handles need caller coordination.
+
+`ingest()` is the catch-up API. Explicit source IDs retain exact imports.
+`answer(..., remember=False)` retains read-only evaluation. The current
+LongMemEval runner routes supplied sessions as batches and can coalesce them.
+Retired benchmarks and protocols were removed from the working tree. Earlier
+measurements do not establish this construction policy or huge-node reasoning.
+See [conversation tests](../tests/test_conversations.py) and
+[the current runbook](../experiments/longmemeval.md).
+
+## D10: Name model roles Main, Reader, and Graph
+
+Settings configure main, reader, and graph clients independently. Topic
+routing and generic connection proposals use the graph client. Readers
+read recursively and interpret relationships at query time. Both conversational
+answers and catch-up imports share topic routing. Imports route a batch as one
+unit. Usage and admission limits distinguish graph calls from reader calls. Primary
+edges, proposals, and traversal APIs contain no relationship type. Schema 5
+removes that storage field and rejects schema 4 without modifying it.
+
+Public constructor fields, settings prefixes, budget counters, and model trace
+roles use main, reader, and graph consistently. There are no legacy role aliases.
+The specialized iterative gatherer is EvidenceReader. The standalone RLM uses
+main_model and reader_model, while child still denotes a recursive invocation.
+MaintenancePolicy, MaintenanceResult, and maintenance outcomes name the process.
+Benchmark protocol version 2 uses the same model and pricing keys. See
+[configuration tests](../tests/test_config.py), [runtime tests](../tests/test_runtime.py),
+and [benchmark tests](../tests/test_memory_benchmark.py).
