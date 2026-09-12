@@ -34,8 +34,7 @@ from llgm.evaluation.artifacts import write_json, write_jsonl
 from llgm.evaluation.baselines import answer_baseline
 from llgm.evaluation.benchmark_preflight import preflight_runtime
 from llgm.evaluation.costs import Allowance, make_token_pacer, recorded_model
-from llgm.evaluation.longmemeval import EvaluationCase, load_longmemeval
-from llgm.evaluation.node_search import anonymize_case
+from llgm.evaluation.longmemeval import EvaluationCase, anonymize_case, load_longmemeval
 from llgm.inference.repl import DockerREPLConfig
 from llgm.models.hosted import OpenAICompatibleModelClient, OpenAIModelClient
 
@@ -676,9 +675,7 @@ async def execute(protocol: dict, root: Path, directory: Path) -> dict:
 def main() -> None:
     """Validate without paid calls by default, or explicitly execute the frozen protocol."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--protocol", type=Path, default=Path("experiments/longmemeval_pilot_v6.json")
-    )
+    parser.add_argument("--protocol", type=Path, default=Path("experiments/longmemeval_pilot.json"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--execute", action="store_true")

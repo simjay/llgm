@@ -54,15 +54,10 @@ def test_upload_allowlist_excludes_private_checkout_files(job_module):
     expected = {
         "tools/colbert_modal.py",
         "tools/colbert_worker.py",
-        "tools/node_search_worker.py",
-        "tools/node_search_cases.py",
         "tests/conftest.py",
         "tests/integration/test_live_colbert.py",
         "tests/fixtures/longmemeval-s.json",
         "experiments/colbert_modal.json",
-        "experiments/node_search_v1.json",
-        "experiments/node_search_opaque_v1.json",
-        "experiments/node_search_controlled.json",
         "experiments/colbert-requirements.txt",
         "pyproject.toml",
     }

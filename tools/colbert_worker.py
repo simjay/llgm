@@ -490,7 +490,7 @@ def main() -> int:
     """Write a machine-readable job result, including failures, and set the process status."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("build", "reopen", "benchmark", "node-search"):
+    for name in ("build", "reopen", "benchmark"):
         command = commands.add_parser(name)
         command.add_argument("--output", type=Path, required=True)
         if name == "reopen":
@@ -499,18 +499,12 @@ def main() -> int:
             command.add_argument("--run-id", required=True)
         if name == "build":
             command.add_argument("--case-id", required=True)
-        if name == "node-search":
-            command.add_argument("--protocol", default="node_search_v1.json")
     args = parser.parse_args()
     try:
         if args.command == "build":
             result = build_case(args.case_id, args.run_id)
         elif args.command == "reopen":
             result = reopen_index(args.index_id)
-        elif args.command == "node-search":
-            from node_search_worker import run_experiment
-
-            result = run_experiment(args.run_id, args.protocol)
         else:
             result = benchmark(args.run_id)
     except Exception as exc:

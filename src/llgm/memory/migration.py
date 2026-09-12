@@ -12,8 +12,76 @@ from typing import Mapping
 
 from llgm.core.errors import ConfigurationError
 from llgm.core.types import JournalRef, NodeRef
-from llgm.memory.workspace import Workspace, _create_edge_tables, _journal_from_dict
+from llgm.memory.workspace import (
+    Workspace,
+    _create_conversation_tables,
+    _create_edge_tables,
+    _journal_from_dict,
+)
 from llgm.storage import LocalBlobStore
+
+
+async def copy_schema3_workspace(source: str | Path, destination: str | Path) -> dict:
+    """Copy local schema-3 evidence into schema 4 without modifying the original.
+
+    Source and journal identities remain unchanged. Existing primary edges keep
+    their recorded provenance and labels as historical data. New automatic
+    connections use only related_to. The destination must not exist.
+    """
+    source, destination = Path(source).resolve(), Path(destination).resolve()
+    if destination.exists() or source == destination or source in destination.parents:
+        raise ConfigurationError("Migration destination must be new and outside the source")
+    if not (source / "metadata.sqlite3").is_file():
+        raise ConfigurationError("Migration requires a local workspace directory")
+
+    def copy():
+        """Stage a consistent database backup and verified blobs before publication."""
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix=".llgm-convert-", dir=destination.parent
+        ) as temporary:
+            staged = Path(temporary) / "workspace"
+            staged.mkdir()
+            original = sqlite3.connect(
+                (source / "metadata.sqlite3").as_uri() + "?mode=ro", uri=True
+            )
+            copied = sqlite3.connect(staged / "metadata.sqlite3", isolation_level=None)
+            try:
+                if original.execute("PRAGMA user_version").fetchone()[0] != 3:
+                    raise ConfigurationError("This converter accepts workspace schema 3 only")
+                original.backup(copied)
+                if copied.execute("PRAGMA user_version").fetchone()[0] != 3:
+                    raise ConfigurationError("Source format changed during conversion")
+                before, after = LocalBlobStore(source / "blobs"), LocalBlobStore(staged / "blobs")
+                count = 0
+                for (digest,) in copied.execute("SELECT blob_digest FROM sources"):
+                    if after.put(before.get(digest)) != digest:
+                        raise ConfigurationError("Copied blob identity changed")
+                    count += 1
+                copied.execute("BEGIN IMMEDIATE")
+                _create_conversation_tables(copied)
+                copied.execute(
+                    "UPDATE workspace_metadata SET value=? WHERE key='workspace_id'",
+                    (uuid.uuid4().hex,),
+                )
+                copied.execute("PRAGMA user_version=4")
+                copied.execute("COMMIT")
+            finally:
+                copied.close()
+                original.close()
+            report = {
+                "source_schema": 3,
+                "workspace_schema": 4,
+                "source_count": count,
+                "history_preserved": True,
+            }
+            (staged / "conversion.json").write_text(json.dumps(report, indent=2) + "\n")
+            if destination.exists():
+                raise ConfigurationError("Migration destination appeared before publication")
+            staged.rename(destination)
+            return report
+
+    return await asyncio.to_thread(copy)
 
 
 async def copy_schema2_workspace(
@@ -28,7 +96,7 @@ async def copy_schema2_workspace(
     ``edge``, ``amendment``, or ``unresolved``. Unresolved records remain readable
     in history but block effective operational reads. Only uncorrected whole-node
     assertion links can be promoted. Source blobs and original journals retain
-    schema 2. The copied workspace metadata uses schema 3. Existing destinations
+    schema 2. The copied workspace metadata uses schema 4. Existing destinations
     are refused and source metadata is opened read-only.
     """
     source, destination = Path(source).resolve(), Path(destination).resolve()
@@ -105,6 +173,7 @@ async def copy_schema2_workspace(
                 copied.execute("PRAGMA foreign_keys=ON")
                 copied.execute("BEGIN IMMEDIATE")
                 _create_edge_tables(copied)
+                _create_conversation_tables(copied)
                 copied.execute(
                     "INSERT INTO _journal_operational SELECT entry_id FROM journal_entries"
                 )
@@ -112,7 +181,7 @@ async def copy_schema2_workspace(
                     "UPDATE workspace_metadata SET value=? WHERE key='workspace_id'",
                     (uuid.uuid4().hex,),
                 )
-                copied.execute("PRAGMA user_version=3")
+                copied.execute("PRAGMA user_version=4")
                 copied.execute("COMMIT")
                 return records
             finally:
@@ -174,7 +243,7 @@ async def copy_schema2_workspace(
             stats = await workspace._run(classify)
         report = {
             "source_schema": 2,
-            "workspace_schema": 3,
+            "workspace_schema": 4,
             "source_path": str(source),
             "source_count": len(stats),
             "journal_classifications": mappings,

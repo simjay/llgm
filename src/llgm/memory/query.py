@@ -204,31 +204,13 @@ class QueryEvidence:
     ) -> dict[str, Any]:
         """Page canonical turn handles without exposing original source text to the model.
 
-        The current blob adapter loads the source on the host to obtain its turn
-        metadata. This operation bounds the returned page, not physical blob I/O.
+        Appended topic turns use indexed coordinates without loading their text.
+        Legacy imported base blobs still require a whole-blob read.
         """
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 128:
             raise ConfigurationError("source_info requires offset >= 0 and 1 <= limit <= 128")
         await self.initialize_node(node_id)
-        source = await self.evidence.source(node_id)
-        turns = source.turns[offset : offset + limit]
-        return {
-            "node_id": node_id,
-            "offset": offset,
-            "total_turns": len(source.turns),
-            "next_offset": offset + limit if offset + limit < len(source.turns) else None,
-            "turns": [
-                {
-                    "turn_id": turn.turn_id,
-                    "role": turn.role,
-                    "length": len(turn.text),
-                    "reference": reference_to_dict(
-                        SourceSpan(node_id, turn.turn_id, 0, len(turn.text))
-                    ),
-                }
-                for turn in turns
-            ],
-        }
+        return await self.evidence.workspace.source_info(node_id, offset=offset, limit=limit)
 
     async def _read_segments(
         self, reference: EvidenceRef, path: tuple[str, ...]

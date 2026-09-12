@@ -10,8 +10,7 @@ from pathlib import Path
 
 from llgm.core.errors import ConfigurationError
 from llgm.core.types import Conversation, reference_to_dict
-from llgm.evaluation.artifacts import write_json
-from llgm.evaluation.runner import _code_provenance
+from llgm.evaluation.artifacts import _code_provenance, write_json
 from llgm.memory.evidence import Evidence
 from llgm.memory.workspace import Workspace
 from llgm.storage.blobs import LocalBlobStore

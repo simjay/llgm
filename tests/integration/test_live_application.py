@@ -269,7 +269,7 @@ def test_autonomous_memory_application(
                 )
                 assert maintenance.usage["model_calls"] > 0
                 try:
-                    result = await app.answer(case.question, query_date=case.question_date)
+                    result = await app.answer(case.question, query_date=case.question_date, remember=False)
                 finally:
                     record["operations"], record["usage"] = (
                         _safe_trace(app.last_trace),
@@ -630,7 +630,7 @@ def test_controlled_application_updates_restart_and_scopes(
                             scope=case["scope"],
                             query_date=case["date"],
                             as_of_ms=case["as_of_ms"],
-                        )
+                         remember=False)
                         attempt.update(
                             status=result.status,
                             answer=result.answer,

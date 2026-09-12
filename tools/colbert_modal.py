@@ -56,15 +56,10 @@ image = (
 PAYLOAD_FILES = (
     "tools/colbert_modal.py",
     "tools/colbert_worker.py",
-    "tools/node_search_worker.py",
-    "tools/node_search_cases.py",
     "tests/conftest.py",
     "tests/integration/test_live_colbert.py",
     "tests/fixtures/longmemeval-s.json",
     "experiments/colbert_modal.json",
-    "experiments/node_search_v1.json",
-    "experiments/node_search_opaque_v1.json",
-    "experiments/node_search_controlled.json",
     "experiments/colbert-requirements.txt",
     "pyproject.toml",
 )
@@ -135,11 +130,7 @@ def runtime_manifest() -> dict:
         if shutil.which("nvidia-smi")
         else None
     )
-    paths = (
-        sorted(ROOT.glob("src/**/*.py"))
-        + sorted(ROOT.glob("tools/colbert*.py"))
-        + sorted(ROOT.glob("tools/node_search*.py"))
-    )
+    paths = sorted(ROOT.glob("src/**/*.py")) + sorted(ROOT.glob("tools/colbert*.py"))
     files = {str(path.relative_to(ROOT)): file_hash(path) for path in paths}
     frozen = subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True, timeout=30)
     return {
@@ -354,32 +345,6 @@ def gpu_benchmark(run_id: str) -> dict:
 
 @app.function(
     image=image,
-    gpu=PINS["gpu"],
-    cpu=PINS["cpu"],
-    memory=PINS["memory_mib"],
-    volumes={"/assets": volume},
-    timeout=3600,
-    max_containers=1,
-    retries=0,
-    scaledown_window=2,
-)
-def gpu_node_search(run_id: str, protocol_name: str = "node_search_v1.json") -> dict:
-    """Measure frozen passage cutoffs through the application's real seed-selection path."""
-    volume.reload()
-    directory = run_directory(run_id)
-    (directory / "environment.json").write_text(json.dumps(runtime_manifest(), indent=2) + "\n")
-    try:
-        return run_worker(
-            ["node-search", "--run-id", run_id, "--protocol", protocol_name],
-            directory / "node-search.json",
-            3300,
-        )
-    finally:
-        volume.commit()
-
-
-@app.function(
-    image=image,
     volumes={"/assets": volume},
     timeout=60,
     max_containers=1,
@@ -429,7 +394,7 @@ def collect_run(run_id: str, destination: Path) -> None:
 @app.local_entrypoint()
 def main(action: str = "test", run_id: str = "") -> None:
     """Prepare assets or execute one bounded live job and retain local evidence."""
-    if action not in {"prepare", "test", "benchmark", "node-search", "node-search-opaque"}:
+    if action not in {"prepare", "test", "benchmark"}:
         raise ValueError("Unsupported ColBERT experiment action")
     if not run_id:
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + uuid.uuid4().hex[:8]
@@ -461,10 +426,6 @@ def main(action: str = "test", run_id: str = "") -> None:
             )
         elif action == "benchmark":
             result["benchmark"] = gpu_benchmark.remote(run_id)
-        elif action == "node-search":
-            result["node_search"] = gpu_node_search.remote(run_id)
-        elif action == "node-search-opaque":
-            result["node_search"] = gpu_node_search.remote(run_id, "node_search_opaque_v1.json")
         result["status"] = "passed"
     except BaseException as error:
         result["status"] = "failed"

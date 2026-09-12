@@ -90,7 +90,7 @@ class Conversation:
 
 @dataclass(frozen=True)
 class SourceSpan:
-    """A half-open text range in one turn of an immutable source node."""
+    """A half-open text range in an immutable turn of a source node."""
 
     node_id: str
     turn_id: str
@@ -106,7 +106,7 @@ class SourceSpan:
 
 @dataclass(frozen=True)
 class NodeRef:
-    """A whole-node handle whose identity pins immutable source text."""
+    """A stable node handle whose current view includes appended immutable turns."""
 
     node_id: str
 

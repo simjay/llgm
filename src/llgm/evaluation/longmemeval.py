@@ -6,7 +6,7 @@ import hashlib
 import json
 import random
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -274,4 +274,46 @@ def case_from_dict(value: dict[str, Any]) -> EvaluationCase:
         )
     return EvaluationCase(
         value["case_id"], value["question"], value["question_date"], tuple(sources)
+    )
+
+
+def anonymize_case(case: EvaluationCase, gold: GoldRecord) -> tuple[EvaluationCase, GoldRecord]:
+    """Remove benchmark identifier cues while preserving source text and scoring.
+
+    Each node ID becomes ``n-`` plus the first 20 hexadecimal characters of
+    SHA256(``llgm-node-search-opaque-v1:`` + case ID + ``:`` + original node ID).
+    Only date metadata survives. Turn IDs, roles, text, source order, and source
+    timestamps remain exact; this is identifier normalization, not text redaction.
+    Original annotated session IDs stay exclusively in evaluator aliases/labels.
+    """
+    if case.case_id != gold.case_id:
+        raise ConfigurationError("Case and evaluator identities must match")
+    mapping = {
+        source.node_id: "n-"
+        + hashlib.sha256(
+            f"llgm-node-search-opaque-v1:{case.case_id}:{source.node_id}".encode("utf-8")
+        ).hexdigest()[:20]
+        for source in case.sources
+    }
+    if len(mapping) != len(case.sources) or len(set(mapping.values())) != len(mapping):
+        raise ConfigurationError("Original and anonymized node IDs must each be unique")
+    if any(node_id not in mapping for node_id, _ in gold.evidence_turn_ids):
+        raise ConfigurationError("Annotated evidence turn refers to an absent source node")
+    sources = tuple(
+        replace(
+            source,
+            node_id=mapping[source.node_id],
+            metadata={"date": source.metadata["date"]} if "date" in source.metadata else {},
+        )
+        for source in case.sources
+    )
+    return replace(case, sources=sources), replace(
+        gold,
+        source_aliases={
+            mapping[source.node_id]: gold.source_aliases.get(source.node_id, source.node_id)
+            for source in case.sources
+        },
+        evidence_turn_ids=tuple(
+            (mapping[node_id], turn_id) for node_id, turn_id in gold.evidence_turn_ids
+        ),
     )

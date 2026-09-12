@@ -111,11 +111,11 @@ test-data:
 
 benchmark-prepare:
 	$(if $(strip $(BENCHMARK_OUTPUT)),,$(error BENCHMARK_OUTPUT is required. Choose a new directory))
-	"$(PYTHON)" -m llgm.evaluation.memory_benchmark --protocol experiments/longmemeval_pilot_v6.json --output "$(BENCHMARK_OUTPUT)"
+	"$(PYTHON)" -m llgm.evaluation.memory_benchmark --protocol experiments/longmemeval_pilot.json --output "$(BENCHMARK_OUTPUT)"
 
 benchmark-longmemeval:
 	$(if $(strip $(BENCHMARK_OUTPUT)),,$(error BENCHMARK_OUTPUT is required. Choose a new directory))
-	"$(PYTHON)" -m llgm.evaluation.memory_benchmark --protocol experiments/longmemeval_pilot_v6.json --output "$(BENCHMARK_OUTPUT)" $(if $(strip $(ENV_FILE)),--env-file "$(ENV_FILE)",) --execute
+	"$(PYTHON)" -m llgm.evaluation.memory_benchmark --protocol experiments/longmemeval_pilot.json --output "$(BENCHMARK_OUTPUT)" $(if $(strip $(ENV_FILE)),--env-file "$(ENV_FILE)",) --execute
 
 # Remote ColBERT development
 

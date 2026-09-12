@@ -75,7 +75,7 @@ class StorageMigrationTests(unittest.IsolatedAsyncioTestCase):
         report = await copy_schema2_workspace(
             self.source, self.destination, journal_roles=self.roles()
         )
-        self.assertEqual(report["workspace_schema"], 3)
+        self.assertEqual(report["workspace_schema"], 4)
         self.assertTrue(report["history_preserved"])
         self.assertEqual((self.source / "metadata.sqlite3").read_bytes(), self.original_bytes)
         self.assertFalse(Path(str(self.destination / "metadata.sqlite3") + ".indexes").exists())

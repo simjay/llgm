@@ -198,7 +198,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                         "links": [
                             {
                                 "target_node_id": "registry",
-                                "relation": "depends_on",
+                                "relation": "related_to",
                                 "supporting_references": [
                                     source["reference"],
                                     matched["reference"],
@@ -278,19 +278,19 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         """Automatic proposals are asked to use the same relation vocabulary publication enforces."""
         await self.seed(("a", "Orion origin"), ("b", "Orion target"))
         requests = []
-        underlying = proposer(relation="depends_on")
+        underlying = proposer(relation="related_to")
 
         async def observing(request):
             """Retain the actual proposal request before producing a structurally valid fixture response."""
             requests.append(request)
             return await underlying.complete(request)
 
-        policy = MaintenancePolicy(allowed_relations=("depends_on",))
+        policy = MaintenancePolicy(allowed_relations=("related_to",))
         result = await self.app(maintenance=CallableModelClient(observing), policy=policy).organize(
             ["a"]
         )
         self.assertEqual(result.status, "completed")
-        self.assertEqual([entry.relation for entry in result.accepted], ["depends_on"])
+        self.assertEqual([entry.relation for entry in result.accepted], ["related_to"])
         self.assertIn(json.dumps(policy.allowed_relations), requests[0].messages[0].content)
         self.assertEqual(json.loads(requests[0].messages[-1].content)["source_node_id"], "a")
 
@@ -301,14 +301,14 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             {"type": "source_span", "node_id": node_id, "turn_id": "t", "start": 0, "end": 12}
             for node_id in ("a", "b")
         ]
-        policy = MaintenancePolicy(allowed_relations=("depends_on",))
+        policy = MaintenancePolicy(allowed_relations=("related_to",))
         for wrapped in (False, True):
             with self.subTest(wrapped=wrapped):
                 payload = {
                     "links": [
                         {
                             "target_node_id": "b",
-                            "relation": "depends_on",
+                            "relation": "related_to",
                             "supporting_references": [
                                 {"reference": ref, "text": "Orion passage", "metadata": {}}
                                 if wrapped
@@ -502,7 +502,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         await app.ingest(
             conversation("distractor", "A hidden sentinel is unrelated."), organize=False
         )
-        result = await app.answer("Orion rollout date")
+        result = await app.answer("Orion rollout date", remember=False)
         self.assertEqual(result.status, "completed")
         selection = next(event for event in result.trace if event["kind"] == "seed_selection")
         self.assertEqual(selection["selected"], ["release"])
@@ -532,7 +532,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
 
         app = self.app(root=models.root, sidecar=CallableModelClient(reading_model))
         await app.ingest(conversation("a", "Orion color is cobalt."), organize=False)
-        task = asyncio.create_task(app.answer("Orion color"))
+        task = asyncio.create_task(app.answer("Orion color", remember=False))
         await asyncio.wait_for(started.wait(), 1)
         await app.ingest(conversation("b", "Orion color is jade."), organize=False)
         release.set()
@@ -551,7 +551,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.workspace = await Workspace.open(self.path).__aenter__()
         self.assertEqual([edge.target_node_id for edge in await self.workspace.edges("b")], ["a"])
         self.assertEqual(await self.workspace.inspect_journal("b"), [])
-        result = await self.app().answer("Orion registry region")
+        result = await self.app().answer("Orion registry region", remember=False)
         self.assertEqual(result.status, "completed")
         self.assertIn("a", {ref.node_id for ref in result.references})
 
@@ -610,7 +610,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             value=SourceSpan("c", "t", 0, 4),
             provenance=Provenance("user", "fixture"),
         )
-        result = await self.app().answer("Orion color", node_id="a")
+        result = await self.app().answer("Orion color", node_id="a", remember=False)
         self.assertEqual(result.status, "completed")
         self.assertIn(SourceSpan("c", "t", 0, 4), result.references)
         self.assertEqual([edge.target_node_id for edge in await self.workspace.edges("a")], ["b"])
@@ -639,7 +639,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ConfigurationError):
             self.app(max_depth=-1)
         with self.assertRaises(ConfigurationError):
-            await self.app().answer("Question", scope="production")
+            await self.app().answer("Question", scope="production", remember=False)
 
     async def test_synchronous_preparation_exhaustion_never_dispatches_a_model(self):
         """A blocking index build consumes the application deadline before provider admission."""
@@ -661,7 +661,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             patch("llgm.llgm.Evidence.open", side_effect=slow_open),
             patch("llgm.llgm.time", NS(monotonic=lambda: clock.now)),
         ):
-            result = await app.answer("Question", node_id="a", budget=Budget(timeout_seconds=0.01))
+            result = await app.answer("Question", node_id="a", budget=Budget(timeout_seconds=0.01), remember=False)
         self.assertEqual(result.status, "budget_exhausted")
         self.assertEqual(root.requests, [])
         self.assertEqual(result.usage["model_calls"], 0)
@@ -684,7 +684,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
 
         app = self.app()
         with patch("llgm.llgm.Evidence.open", side_effect=blocked_open):
-            result = await app.answer("Question", budget=Budget(timeout_seconds=0.01))
+            result = await app.answer("Question", budget=Budget(timeout_seconds=0.01), remember=False)
         self.assertTrue(cancelled.is_set())
         self.assertEqual(result.status, "budget_exhausted")
         self.assertEqual(result.usage["model_calls"], 0)
@@ -696,7 +696,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         app = self.app()
         with patch("llgm.llgm.Evidence.open", side_effect=ConfigurationError("index unavailable")):
             with self.assertRaises(ConfigurationError):
-                await app.answer("Question")
+                await app.answer("Question", remember=False)
         self.assertEqual(app.last_usage["model_calls"], 0)
         self.assertEqual(app.last_usage["inference_seconds"], 0)
         self.assertGreaterEqual(app.last_usage["total_seconds"], 0)
@@ -717,7 +717,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         models = Models()
         result = await self.app(root=models.root, sidecar=models.sidecar).answer(
             "Orion region", query_date=date
-        )
+        , remember=False)
         self.assertEqual(result.status, "partial")
         context = json.loads(models.child_requests[0].messages[1].content)
         self.assertEqual(context["query_date"], date)
@@ -851,7 +851,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError):
                 async with LLGM.from_settings(settings, repl_factory=ReplayFactory()) as app:
                     await app.ingest(conversation("a", "Exact persisted source"), organize=False)
-                    await app.answer("Exact persisted source")
+                    await app.answer("Exact persisted source", remember=False)
         self.assertTrue(all(client.closed for client in clients))
         self.assertEqual(app.last_usage["model_calls"], 1)
         self.assertGreaterEqual(
@@ -889,7 +889,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         try:
             app = self.app(root=root, sidecar=models.sidecar, evidence_factory=factory)
             maintenance = await app.organize(["b"])
-            result = await app.answer("Which region?")
+            result = await app.answer("Which region?", remember=False)
             self.assertEqual(maintenance.status, "completed")
             self.assertEqual(result.status, "completed")
             self.assertIn("a", {ref.node_id for ref in result.references})
@@ -929,7 +929,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 settings, evidence_factory=factory, repl_factory=ReplayFactory()
             ) as app:
                 await app.ingest(conversation("a", "Orion region is eu-west-1."), organize=False)
-                self.assertEqual((await app.answer("Which region?")).status, "completed")
+                self.assertEqual((await app.answer("Which region?", remember=False)).status, "completed")
         self.assertEqual(len(calls), 1)
         with patch("llgm.llgm.Workspace.open") as opening:
             with self.assertRaises(ConfigurationError):
@@ -949,10 +949,10 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             * 3
         )
         app = self.app(root=root)
-        first = await app.answer("Which region?")
-        second = await app.answer("Which region?")
+        first = await app.answer("Which region?", remember=False)
+        second = await app.answer("Which region?", remember=False)
         await app.ingest(conversation("a-update", "Orion new region"), organize=False)
-        third = await app.answer("Which region?")
+        third = await app.answer("Which region?", remember=False)
         self.assertEqual(
             [
                 result.trace[0]["index"]["source_records_indexed"]
@@ -972,7 +972,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             max_seed_nodes=2,
             retrieval_k=6,
             max_concurrency=1,
-        ).answer("Orion region")
+        ).answer("Orion region", remember=False)
         selection = next(event for event in result.trace if event["kind"] == "seed_selection")
         self.assertEqual(len(selection["selected"]), 2)
         self.assertEqual(len(selection["skipped"]), 1)
@@ -986,7 +986,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         """A missing seed does not turn into an unsupported root guess or implicit search policy."""
         await self.seed(("a", "Orion region"))
         models = Models()
-        result = await self.app(root=models.root, sidecar=models.sidecar).answer("zqxunmatched")
+        result = await self.app(root=models.root, sidecar=models.sidecar).answer("zqxunmatched", remember=False)
         self.assertEqual(result.status, "partial")
         self.assertEqual(result.usage["model_calls"], 0)
         self.assertEqual(result.usage["searches"], 1)

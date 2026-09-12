@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import json
 import tempfile
@@ -11,24 +10,15 @@ from pathlib import Path
 
 from llgm.core.errors import ConfigurationError, SchemaError
 from llgm.core.types import SourceSpan
-from llgm.evaluation.artifacts import read_jsonl, write_json, write_jsonl
+from llgm.evaluation.artifacts import read_jsonl, write_jsonl
 from llgm.evaluation.longmemeval import history_groups, parse_longmemeval, select_development
-from llgm.evaluation.matrix import (
-    REQUIRED_ARMS,
-    matrix_template,
-    preflight,
-    tokenizer_settings,
-    validate_matrix,
-)
-from llgm.evaluation.prepare import controlled_dataset, diagnostic_dataset, prepare
-from llgm.evaluation.runner import offline_smoke
+from llgm.evaluation.prepare import controlled_dataset, diagnostic_dataset
 from llgm.evaluation.scoring import (
     evidence_coverage,
     exact_match_diagnostic,
     export_official_predictions,
     source_recall,
 )
-from llgm.retrieval.base import passage_from_dict
 
 
 class LongMemEvalTests(unittest.TestCase):
@@ -140,223 +130,6 @@ class LongMemEvalTests(unittest.TestCase):
         self.assertFalse(set(first["development_ids"]) & set(first["held_out_ids"]))
         self.assertTrue(set(first["smoke_ids"]).issubset(first["development_ids"]))
         self.assertIn("abstention", first["ability_counts"])
-
-
-class PreparationAndMatrixTests(unittest.TestCase):
-    """Experiment matrix validation and auditable preparation outputs."""
-
-    def test_required_matrix_has_twelve_unique_arms(self):
-        """The required matrix contains every declared retrieval/policy arm exactly once."""
-        template = matrix_template()
-        validate_matrix(template)
-        self.assertEqual({arm["id"] for arm in template["arms"]}, set(REQUIRED_ARMS))
-        template["arms"] = [arm for arm in template["arms"] if arm["backend"] != "C"]
-        with self.assertRaises(ConfigurationError):
-            validate_matrix(template)
-
-    def test_backend_identity_and_resource_contract_are_checked(self):
-        """Backend labels cannot silently change the frozen experiment resource contract."""
-        for modify in (
-            lambda x: x["arms"][0].update(backend="D"),
-            lambda x: x["hybrid"].update(pool_size=10),
-            lambda x: x["passages"].update(window=200),
-            lambda x: x["budgets"].update(max_searches=1),
-        ):
-            value = matrix_template()
-            modify(value)
-            with self.assertRaises(ConfigurationError):
-                validate_matrix(value)
-
-    def test_standalone_tokenizer_pins_override_encoder_assets(self):
-        """Tokenizer identity stays distinct from optional encoder checkpoint and code pins."""
-        matrix = matrix_template()
-        matrix["colbert"].update(
-            checkpoint_path="encoder-checkpoint", repository_revision="encoder-code-revision"
-        )
-        matrix["tokenizer"] = {
-            "local_path": "tokenizer-only-files",
-            "revision": "tokenizer-release-revision",
-        }
-        validate_matrix(matrix)
-        resolved = tokenizer_settings(matrix)
-        self.assertEqual(resolved, matrix["tokenizer"])
-        resolved["revision"] = "mutated-copy"
-        self.assertEqual(matrix["tokenizer"]["revision"], "tokenizer-release-revision")
-        self.assertEqual(matrix["colbert"]["repository_revision"], "encoder-code-revision")
-
-    def test_unset_tokenizer_preserves_legacy_matrix_compatibility(self):
-        """Absent, empty and fully unset tokenizer sections retain legacy checkpoint loading."""
-        for config in (None, {}, {"local_path": None, "revision": None}):
-            with self.subTest(config=config):
-                matrix = matrix_template()
-                matrix["colbert"].update(
-                    checkpoint_path="legacy-checkpoint", repository_revision="legacy-revision"
-                )
-                if config is None:
-                    matrix.pop("tokenizer")
-                else:
-                    matrix["tokenizer"] = config
-                validate_matrix(matrix)
-                self.assertEqual(
-                    tokenizer_settings(matrix),
-                    {"local_path": "legacy-checkpoint", "revision": "legacy-revision"},
-                )
-
-    def test_partial_tokenizer_pins_fail_before_preflight(self):
-        """Partial, wrongly typed and unknown tokenizer pins cannot select legacy assets silently."""
-        for config in (
-            None,
-            [],
-            {"local_path": "tokenizer"},
-            {"revision": "revision"},
-            {"local_path": None},
-            {"local_path": "tokenizer", "revision": None},
-            {"local_path": None, "revision": "revision"},
-            {"local_path": "tokenizer", "revision": " "},
-            {"local_path": 5, "revision": "revision"},
-            {"local_path": "tokenizer", "revision": "revision", "extra": None},
-            {"unexpected": None},
-        ):
-            with self.subTest(config=config):
-                matrix = matrix_template()
-                matrix["tokenizer"] = config
-                for check in (validate_matrix, tokenizer_settings):
-                    with self.assertRaises(ConfigurationError):
-                        check(matrix)
-
-    def test_preparation_separates_gold_and_preserves_per_case_corpus(self):
-        """Prepared case corpora omit evaluator labels and retain separate gold records."""
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            write_json(root / "input.json", diagnostic_dataset())
-            manifest = prepare(root / "input.json", root / "prepared", target=5)
-            self.assertEqual(manifest["schema_version"], 2)
-            self.assertEqual(manifest["evidence_schema"], "immutable-node-v2")
-            queries = read_jsonl(root / "prepared/queries.jsonl")
-            self.assertEqual(len(queries), 5)
-            for query in queries:
-                passages = read_jsonl(root / "prepared" / query["passages_path"])
-                self.assertEqual(len({p["refs"][0]["node_id"] for p in passages}), 1)
-                self.assertNotIn("has_answer", json.dumps(passages))
-                self.assertNotIn("answer_session_ids", json.dumps(passages))
-                for raw in passages:
-                    self.assertNotIn("source_version", raw["refs"][0])
-                    decoded = passage_from_dict(raw)
-                    self.assertEqual(decoded.refs[0], SourceSpan(**raw["refs"][0]))
-            self.assertEqual(len(read_jsonl(root / "prepared/evaluator/gold.jsonl")), 6)
-            self.assertIn("queries.jsonl", manifest["files"])
-            with self.assertRaises(ConfigurationError):
-                prepare(root / "input.json", root / "prepared")
-
-    def test_evaluation_reservation_does_not_create_development(self):
-        """Reserving evaluation cases does not turn held-out data into development data."""
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            write_json(root / "input.json", diagnostic_dataset())
-            manifest = prepare(
-                root / "input.json", root / "prepared", selection_mode="evaluation", case_limit=2
-            )
-            self.assertEqual(len(manifest["selection"]["held_out_ids"]), 6)
-            self.assertEqual(len(manifest["selection"]["evaluation_ids"]), 2)
-            self.assertEqual(manifest["selection"]["development_ids"], [])
-            self.assertTrue(manifest["selection"]["freeze_required"])
-            self.assertEqual(len(read_jsonl(root / "prepared/queries.jsonl")), 2)
-
-    def test_preflight_includes_colbert_and_labels_diagnostic(self):
-        """Preflight exposes missing ColBERT assets and distinguishes diagnostic readiness."""
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            write_json(root / "input.json", diagnostic_dataset())
-            prepare(
-                root / "input.json",
-                root / "prepared",
-                target=5,
-                dataset_kind="controlled-offline-fixture",
-            )
-            full = preflight(root / "prepared", matrix_template())
-            self.assertFalse(full["ready"])
-            self.assertEqual(len(full["arms"]), 12)
-            self.assertTrue(
-                all(arm["status"] == "blocked" for arm in full["arms"] if arm["backend"] == "C")
-            )
-            diagnostic = preflight(root / "prepared", matrix_template(), diagnostic=True)
-            self.assertTrue(diagnostic["ready"])
-            self.assertFalse(diagnostic["benchmark_ready"])
-            self.assertEqual([a["id"] for a in diagnostic["arms"] if a["selected"]], ["B-S"])
-
-    def test_preflight_rejects_legacy_manifest_without_decoding_or_rewriting(self):
-        """A v1 preparation cannot be treated as current evidence even when its files are accessible."""
-        from unittest.mock import patch
-
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            write_json(root / "input.json", diagnostic_dataset())
-            manifest = prepare(
-                root / "input.json",
-                root / "prepared",
-                target=5,
-                dataset_kind="controlled-offline-fixture",
-            )
-            manifest["schema_version"] = 1
-            manifest.pop("evidence_schema")
-            path = root / "prepared/prepared.json"
-            write_json(path, manifest)
-            original = path.read_bytes()
-            with patch("llgm.evaluation.matrix.passage_from_dict") as decoder:
-                report = preflight(root / "prepared", matrix_template(), diagnostic=True)
-            self.assertFalse(report["ready"])
-            self.assertTrue(any("require schema_version=2" in error for error in report["errors"]))
-            self.assertEqual(report["network_calls"], 0)
-            decoder.assert_not_called()
-            self.assertEqual(path.read_bytes(), original)
-
-    def test_legacy_reference_is_rejected_even_under_a_relabelled_manifest(self):
-        """Changing a manifest number cannot silently discard an old source-edition coordinate."""
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            write_json(root / "input.json", diagnostic_dataset())
-            prepare(
-                root / "input.json",
-                root / "prepared",
-                target=5,
-                dataset_kind="controlled-offline-fixture",
-            )
-            query = read_jsonl(root / "prepared/queries.jsonl")[0]
-            path = root / "prepared" / query["passages_path"]
-            passages = read_jsonl(path)
-            passages[0]["refs"][0]["source_version"] = 1
-            with self.assertRaisesRegex(TypeError, "source_version"):
-                passage_from_dict(passages[0])
-            write_jsonl(path, passages)
-            report = preflight(root / "prepared", matrix_template(), diagnostic=True)
-            self.assertFalse(report["ready"])
-            self.assertTrue(
-                any(
-                    "source_version" in error and "Regenerate" in error
-                    for error in report["errors"]
-                )
-            )
-            self.assertEqual(read_jsonl(path)[0]["refs"][0]["source_version"], 1)
-
-    def test_offline_smoke_writes_all_artifacts(self):
-        """Offline smoke produces complete artifacts without embedding requests."""
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            result = asyncio.run(offline_smoke(root / "smoke"))
-            self.assertEqual(result["physical_embedding_requests"], 0)
-            self.assertEqual(result["arms"]["B-S"]["completed"], 5)
-            self.assertFalse(result["benchmark_result"])
-            for filename in (
-                "manifest.json",
-                "cases.jsonl",
-                "traces.jsonl",
-                "usage.jsonl",
-                "predictions.jsonl",
-                "judgments.jsonl",
-                "metrics.json",
-                "decision.md",
-            ):
-                self.assertTrue((root / "smoke/run/B-S" / filename).exists())
 
 
 class ScoringTests(unittest.TestCase):

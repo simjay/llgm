@@ -143,6 +143,7 @@ class LLGM:
         self.last_trace: list[dict] = []
         self.last_usage: dict = {}
         self._maintenance_lock = asyncio.Lock()
+        self._conversation_lock = workspace._conversation_lock
 
     @classmethod
     @asynccontextmanager
@@ -235,6 +236,7 @@ class LLGM:
         *,
         idempotency_key: str | None = None,
         organize: bool = True,
+        conversation_id: str = "default",
     ) -> IngestionOutcome:
         """Store a conversation and optionally discover relationships to other sources.
 
@@ -260,9 +262,50 @@ class LLGM:
             ):
                 raise SchemaError("ingest requires text, a sequence of turns, or a Conversation")
             conversation = Conversation.from_turns(list(conversation))
+        if conversation.node_id is None:
+            async with self._conversation_lock:
+                source, routing = await self._remember(
+                    conversation, conversation_id, idempotency_key=idempotency_key
+                )
+            maintenance = await self.organize([source.node_id], disabled=not organize)
+            maintenance = replace(
+                maintenance,
+                usage={**maintenance.usage, "topic_routing": routing.usage()},
+                trace=(*routing.events, *maintenance.trace),
+            )
+            return IngestionOutcome(source, maintenance)
         source = await self.workspace.ingest(conversation, idempotency_key=idempotency_key)
         maintenance = await self.organize([source.node_id], disabled=not organize)
         return IngestionOutcome(source, maintenance)
+
+    async def _remember(self, conversation, conversation_id, *, idempotency_key=None, ledger=None):
+        """Route and append incoming turns while retaining their original attribution."""
+        from llgm.memory.topics import choose_topic
+        from llgm.memory.conversation import append_fingerprint
+
+        if not isinstance(conversation_id, str) or not conversation_id.strip():
+            raise ConfigurationError("conversation_id must be nonempty text")
+        ledger = ledger or RunLedger(self.maintenance_policy.budget, byte_token_bound)
+        self.workspace._key(idempotency_key)
+        if idempotency_key is not None:
+            prior = await self.workspace._run(lambda: self.workspace._retry(
+                "conversation_append", idempotency_key, append_fingerprint(conversation_id, conversation)
+            ))
+            if prior is not None:
+                return IngestResult(**prior, created=False), ledger
+        async with asyncio.timeout(ledger.remaining_seconds()):
+            if self.maintenance_policy.mode == "disabled":
+                selected = await self.workspace.conversation_node(conversation_id)
+            else:
+                async with await self._open_evidence() as evidence:
+                    selected = await choose_topic(
+                        self.workspace, evidence, self.maintenance_model, ledger,
+                        conversation_id, conversation.turns,
+                    )
+            source = await self.workspace.append_conversation(
+                conversation_id, conversation, node_id=selected, idempotency_key=idempotency_key
+            )
+        return source, ledger
 
     async def organize(
         self, node_ids: Sequence[str] | None = None, *, disabled: bool = False
@@ -412,6 +455,96 @@ class LLGM:
 
     async def answer(
         self,
+        question: str | Sequence[Mapping[str, Any] | Turn],
+        *,
+        conversation_id: str = "default",
+        remember: bool = True,
+        scope: Mapping[str, Any] | None = None,
+        query_date: str | None = None,
+        as_of_ms: int | None = None,
+        budget: Budget | None = None,
+        node_id: str | None = None,
+    ) -> AnswerResult:
+        """Continue a persistent conversation and return an answer with evidence.
+
+        :param question: New user text or new role/content turns ending in a user
+            message. Send only new turns, not the accumulated transcript.
+        :param conversation_id: Stable chat identity, resumed across application restarts.
+            Topic changes can select a different node within the same chat.
+        :param remember: Save incoming turns and the returned assistant text.
+            False performs a read-only memory question and requires plain text.
+        :param scope: Declared evidence applicability values, not access control.
+        :param query_date: Human-readable date for interpreting evidence.
+        :param as_of_ms: Declared evidence validity instant in Unix milliseconds.
+        :param budget: Complete shared routing and inference allowance for this call.
+        :param node_id: Explicit initial reading node for a read-only answer.
+        :returns: Answer, source references, status, usage and active topic identity.
+
+        Stored user turns survive generation failure. Only nonempty returned
+        assistant text is appended. Calls on this instance are serialized.
+        A repeated call is a new message, including after a failed generation.
+        """
+        if type(remember) is not bool:
+            raise ConfigurationError("remember must be boolean")
+        if not remember:
+            return await self._answer(
+                question,
+                scope=scope,
+                query_date=query_date,
+                as_of_ms=as_of_ms,
+                budget=budget,
+                node_id=node_id,
+            )
+        if node_id is not None:
+            raise ConfigurationError("node_id requires remember=False")
+        if scope is not None and not isinstance(scope, Mapping):
+            raise ConfigurationError("scope must be a mapping")
+        if query_date is not None and (not isinstance(query_date, str) or not query_date.strip()):
+            raise ConfigurationError("query_date must be nonempty text or None")
+        validate_instant_ms(as_of_ms, "as_of_ms")
+        if isinstance(question, str):
+            turns = [{"role": "user", "content": question}]
+        elif isinstance(question, Sequence) and not isinstance(question, (bytes, bytearray)):
+            turns = list(question)
+        else:
+            raise SchemaError("answer requires text or new chat turns")
+        if any(not isinstance(turn, (Mapping, Turn)) for turn in turns):
+            raise SchemaError("answer requires role/content turns")
+        conversation = Conversation.from_turns(
+            turns, metadata={"date": query_date} if query_date else {}
+        )
+        if (
+            conversation.turns[-1].role != "user"
+            or not conversation.turns[-1].text.strip()
+            or any(turn.role not in {"user", "assistant"} for turn in conversation.turns)
+        ):
+            raise SchemaError("answer requires user/assistant turns ending with nonempty user text")
+        async with self._conversation_lock:
+            ledger = RunLedger(budget or self.inference_budget, byte_token_bound, reserve_root=True)
+            source, ledger = await self._remember(conversation, conversation_id, ledger=ledger)
+            result = await self._answer(
+                conversation.turns[-1].text,
+                scope=scope,
+                query_date=query_date,
+                as_of_ms=as_of_ms,
+                budget=budget,
+                active_node_id=source.node_id,
+                ledger=ledger,
+            )
+            result.conversation_id, result.node_id = conversation_id, source.node_id
+            if result.answer:
+                await self.workspace.append_conversation(
+                    conversation_id,
+                    Conversation.from_turns(
+                        [{"role": "assistant", "content": result.answer}],
+                        metadata=conversation.metadata,
+                    ),
+                    node_id=source.node_id,
+                )
+            return result
+
+    async def _answer(
+        self,
         question: str,
         *,
         scope: Mapping[str, Any] | None = None,
@@ -419,6 +552,8 @@ class LLGM:
         as_of_ms: int | None = None,
         budget: Budget | None = None,
         node_id: str | None = None,
+        active_node_id: str | None = None,
+        ledger: RunLedger | None = None,
     ) -> AnswerResult:
         """Read relevant sources and combine their findings into a cited answer.
 
@@ -454,7 +589,9 @@ class LLGM:
             NodeRef(node_id)
         selected_budget = budget or self.inference_budget
         started = time.monotonic()
-        preparation_ledger = RunLedger(selected_budget, byte_token_bound, reserve_root=True)
+        preparation_ledger = ledger or RunLedger(
+            selected_budget, byte_token_bound, reserve_root=True
+        )
         preparation = {"kind": "preparation", "status": "started"}
         self.last_trace, self.last_usage = [preparation], {}
         evidence, runtime, result = None, None, None
@@ -470,6 +607,27 @@ class LLGM:
                     max_journal_bytes=self.max_journal_bytes,
                 )
                 seeds = await self._seeds(question, node_id, evidence, preparation_ledger)
+                if active_node_id is not None:
+                    page = await self.workspace.source_info(active_node_id, limit=1)
+                    page = await self.workspace.source_info(
+                        active_node_id, offset=max(0, page["total_turns"] - 4), limit=4
+                    )
+                    from llgm.core.types import reference_from_dict
+
+                    refs = tuple(reference_from_dict(item["reference"]) for item in page["turns"])
+                    existing = next(
+                        (seed.references for seed in seeds if seed.node_id == active_node_id), ()
+                    )
+                    seeds = [
+                        NodeSeed(active_node_id, tuple(dict.fromkeys((*refs, *existing)))),
+                        *(seed for seed in seeds if seed.node_id != active_node_id),
+                    ]
+                    # The active topic occupies one seed slot even for a follow-up
+                    # whose wording has no lexical match with earlier evidence.
+                    seeds = seeds[: self.max_seed_nodes]
+                    preparation_ledger.events.append(
+                        {"kind": "conversation_seed", "node_id": active_node_id}
+                    )
                 prepared_at = time.monotonic()
                 preparation.update(status="completed", index=dict(evidence.preparation))
                 remaining = selected_budget.timeout_seconds - (prepared_at - started)
@@ -490,6 +648,7 @@ class LLGM:
                     repl_config=self.repl_config,
                     repl_factory=self.repl_factory,
                     capture_text=self.capture_text,
+                    conversational=active_node_id is not None,
                 )
                 result = await runtime.answer(
                     question,

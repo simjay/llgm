@@ -24,7 +24,7 @@ class MaintenancePolicy:
     """
 
     mode: str = "validated"
-    allowed_relations: tuple[str, ...] = ("related_to", "supported_by", "depends_on", "contradicts")
+    allowed_relations: tuple[str, ...] = ("related_to",)
     max_nodes: int = 8
     max_candidates: int = 8
     max_links_per_node: int = 4
@@ -58,6 +58,8 @@ class MaintenancePolicy:
         ):
             raise ConfigurationError("allowed_relations must contain nonempty relation names")
         object.__setattr__(self, "allowed_relations", tuple(dict.fromkeys(self.allowed_relations)))
+        if self.allowed_relations != ("related_to",):
+            raise ConfigurationError("Automatic connections use related_to only")
         if not isinstance(self.budget, Budget):
             raise ConfigurationError("Maintenance budget must be a Budget")
 

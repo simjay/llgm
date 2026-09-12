@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib.metadata
 import json
+import platform
+import subprocess
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -80,3 +84,39 @@ class RunArtifacts:
         """Write the final metrics and research decision alongside recorded events."""
         write_json(self.directory / "metrics.json", metrics)
         (self.directory / "decision.md").write_text(decision + "\n", encoding="utf-8")
+
+
+def _code_provenance() -> dict:
+    """Capture source hashes, runtime packages, and available Git state without network calls."""
+    root = Path(__file__).resolve().parents[3]
+    result = {
+        "source_sha256": {},
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "packages": {},
+    }
+    package = Path(__file__).resolve().parents[1]
+    for source in sorted(package.rglob("*.py")):
+        result["source_sha256"][str(source.relative_to(package))] = hashlib.sha256(
+            source.read_bytes()
+        ).hexdigest()
+    for name in ("llgm", "openai", "anthropic", "transformers", "colbert-ai", "torch"):
+        try:
+            result["packages"][name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            result["packages"][name] = None
+    for key, command in (
+        ("git_commit", ["rev-parse", "HEAD"]),
+        ("git_status", ["status", "--porcelain"]),
+    ):
+        try:
+            result[key] = subprocess.run(
+                ["git", "-C", str(root), *command],
+                text=True,
+                capture_output=True,
+                check=True,
+                timeout=10,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            result[key] = None
+    return result

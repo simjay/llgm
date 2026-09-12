@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from llgm import LLGM, Conversation, Settings, Turn, Workspace
+from llgm import LLGM, Conversation, MaintenancePolicy, Settings, Turn, Workspace
 from llgm.core.errors import ConfigurationError, ConflictError, SchemaError
 from llgm.models import ScriptedModelClient
 
@@ -33,7 +33,7 @@ class ApplicationEntryPointTests(unittest.IsolatedAsyncioTestCase):
         self.path = Path(self.temp.name)
         self.workspace = await Workspace.open(self.path / "inputs").__aenter__()
         self.model = ScriptedModelClient([])
-        self.app = LLGM(self.workspace, self.model, self.model)
+        self.app = LLGM(self.workspace, self.model, self.model, maintenance_policy=MaintenancePolicy(mode="disabled"))
 
     async def asyncTearDown(self):
         """Close storage before removing temporary source files."""
@@ -46,7 +46,7 @@ class ApplicationEntryPointTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(text=text):
                 outcome = await self.app.ingest(text, organize=False)
                 source = await self.workspace.source(outcome.source.node_id)
-                self.assertEqual(source.turns, (Turn("turn-000000", "user", text),))
+                self.assertEqual((source.turns[-1].role, source.turns[-1].text), ("user", text))
                 self.assertEqual(source.metadata, {})
                 self.assertIsNone(source.timestamp_ms)
         self.assertEqual(self.model.requests, [])
@@ -63,7 +63,7 @@ class ApplicationEntryPointTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(container=type(sequence).__name__):
                 outcome = await self.app.ingest(sequence, organize=False)
                 source = await self.workspace.source(outcome.source.node_id)
-                self.assertEqual(source.turns, expected.turns)
+                self.assertEqual([(t.role, t.text) for t in source.turns[-3:]], [(t.role, t.text) for t in expected.turns])
 
     async def test_conversation_preserves_source_identity_metadata_and_timestamp(self):
         """Existing Conversation inputs retain every explicit source field."""

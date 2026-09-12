@@ -42,7 +42,21 @@ from llgm.storage import BlobStore, LocalBlobStore, S3BlobStore
 from llgm.storage._sqlite import enable_wal
 
 T = TypeVar("T")
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
+
+
+def _create_conversation_tables(connection: sqlite3.Connection) -> None:
+    """Add immutable turn segments and persistent conversation routing state."""
+    connection.execute("""CREATE TABLE IF NOT EXISTS source_turns (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT, node_id TEXT NOT NULL REFERENCES sources(node_id),
+        turn_id TEXT NOT NULL, role TEXT NOT NULL, length INTEGER NOT NULL,
+        blob_digest TEXT NOT NULL, metadata TEXT NOT NULL, timestamp_ms INTEGER,
+        UNIQUE(node_id,turn_id))""")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS source_turn_order ON source_turns(node_id,sequence)"
+    )
+    connection.execute("""CREATE TABLE IF NOT EXISTS conversations (
+        conversation_id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES sources(node_id))""")
 
 
 def _json(value: Any) -> str:
@@ -230,6 +244,7 @@ class Workspace:
         self._workspace_id: str | None = None
         self._closed = False
         self._lexical_indexes = {}
+        self._conversation_lock = asyncio.Lock()
 
     @classmethod
     def open(
@@ -352,13 +367,14 @@ class Workspace:
                         operation TEXT NOT NULL, key TEXT NOT NULL, fingerprint TEXT NOT NULL, result TEXT NOT NULL,
                         PRIMARY KEY(operation, key)
                     );
-                    PRAGMA user_version = 3;
+                    PRAGMA user_version = 4;
                 """
                 # executescript would implicitly end our transaction first.
                 for statement in schema.split(";"):
                     if statement.strip():
                         connection.execute(statement)
                 _create_edge_tables(connection)
+                _create_conversation_tables(connection)
                 connection.execute(
                     "INSERT INTO workspace_metadata(key,value) VALUES ('workspace_id',?)",
                     (uuid.uuid4().hex,),
@@ -486,7 +502,7 @@ class Workspace:
 
         return await self._run(operation)
 
-    def _source(self, node_id: str) -> SourceNode:
+    def _base_source(self, node_id: str) -> SourceNode:
         """Resolve a node identity and verify its immutable source blob."""
         row = self._connection.execute(
             "SELECT * FROM sources WHERE node_id=?", (node_id,)
@@ -500,6 +516,58 @@ class Workspace:
             data["metadata"],
             data["timestamp_ms"],
         )
+
+    def _source(self, node_id: str) -> SourceNode:
+        """Materialize a complete node only for callers requesting its full history."""
+        source = self._base_source(node_id)
+        turns = tuple(
+            Turn(
+                row["turn_id"], row["role"], self.blob_store.get(row["blob_digest"]).decode("utf-8")
+            )
+            for row in self._connection.execute(
+                "SELECT * FROM source_turns WHERE node_id=? ORDER BY sequence", (node_id,)
+            )
+        )
+        return SourceNode(node_id, source.turns + turns, source.metadata, source.timestamp_ms)
+
+    async def append_conversation(
+        self, conversation_id, conversation, *, node_id=None, idempotency_key=None
+    ):
+        """Append immutable turns to a topic and persist the conversation's active node.
+
+        A missing node ID creates a topic. Existing turn IDs never change. Input
+        turn IDs are namespaced per append so separate imported sessions can use
+        the same IDs. A retry key deduplicates the entire append transaction.
+        """
+        from llgm.memory.conversation import append_conversation
+
+        return await self._run(
+            lambda: append_conversation(
+                self,
+                conversation_id,
+                conversation,
+                node_id=node_id,
+                idempotency_key=idempotency_key,
+            )
+        )
+
+    async def conversation_node(self, conversation_id: str) -> str | None:
+        """Find the persisted active topic without loading its source text."""
+
+        def operation():
+            """Read one routing record under the workspace lock."""
+            row = self._connection.execute(
+                "SELECT node_id FROM conversations WHERE conversation_id=?", (conversation_id,)
+            ).fetchone()
+            return row[0] if row else None
+
+        return await self._run(operation)
+
+    async def source_info(self, node_id: str, *, offset=0, limit=32) -> dict:
+        """Page turn coordinates without loading appended conversation text."""
+        from llgm.memory.conversation import source_info
+
+        return await self._run(lambda: source_info(self, node_id, offset=offset, limit=limit))
 
     async def sources(self) -> list[SourceNode]:
         """Load all currently published nodes, ordered by node ID."""
@@ -707,7 +775,24 @@ class Workspace:
         for row in rows:
             if row["kind"] == "source":
                 if include_sources:
-                    yield self._source(row["record_id"])
+                    yield self._base_source(row["record_id"])
+            elif row["kind"] == "turn":
+                if include_sources:
+                    turn = self._connection.execute(
+                        "SELECT * FROM source_turns WHERE sequence=?", (row["record_id"],)
+                    ).fetchone()
+                    yield SourceNode(
+                        turn["node_id"],
+                        (
+                            Turn(
+                                turn["turn_id"],
+                                turn["role"],
+                                self.blob_store.get(turn["blob_digest"]).decode("utf-8"),
+                            ),
+                        ),
+                        json.loads(turn["metadata"]),
+                        turn["timestamp_ms"],
+                    )
             else:
                 payload = self._connection.execute(
                     "SELECT payload FROM journal_entries WHERE entry_id=?", (row["record_id"],)
@@ -759,6 +844,24 @@ class Workspace:
     def _resolve(self, ref: EvidenceRef) -> ResolvedEvidence:
         """Resolve canonical source text or a published journal entry."""
         if isinstance(ref, (NodeRef, SourceSpan)):
+            if isinstance(ref, SourceSpan):
+                row = self._connection.execute(
+                    "SELECT * FROM source_turns WHERE node_id=? AND turn_id=?",
+                    (ref.node_id, ref.turn_id),
+                ).fetchone()
+                if row is not None:
+                    if ref.end > row["length"]:
+                        raise ReferenceResolutionError("Source span exceeds turn length")
+                    text = self.blob_store.get(row["blob_digest"]).decode("utf-8")
+                    return ResolvedEvidence(
+                        text[ref.start : ref.end],
+                        ref,
+                        {
+                            "role": row["role"],
+                            "source_metadata": json.loads(row["metadata"]),
+                            "timestamp_ms": row["timestamp_ms"],
+                        },
+                    )
             source = self._source(ref.node_id)
             if isinstance(ref, NodeRef):
                 # This is a display projection, not a source-offset coordinate

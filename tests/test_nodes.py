@@ -416,7 +416,6 @@ def test_exhausted_ancestors_forward_the_same_delivered_grandchild_findings():
 
     async def scenario():
         """Inject post-delivery failures in A and B after C finishes with its selected evidence."""
-        from llgm.evaluation.node_pipeline import trace_summary
 
         owner, factory = third_node_replay(exhaust_after={"a": CHILD, "b": THIRD_CHILD})
         engine, models, _, _ = runtime(Models({"a": [CHILD], "b": [THIRD_CHILD]}), factory=factory)
@@ -428,7 +427,7 @@ def test_exhausted_ancestors_forward_the_same_delivered_grandchild_findings():
         assert returns["c"]["status"] == "completed"
         assert returns["a"]["status"] == returns["b"]["status"] == "budget_exhausted"
         assert returns["a"]["evidence"] == returns["b"]["evidence"] == returns["c"]["evidence"]
-        assert trace_summary(result.trace)["children_with_findings"] == 2
+        assert sum(bool(returns[node]["evidence"]) for node in ("b", "c")) == 2
         assert result.usage["model_calls"] == 5 and len(models.root_requests) == 1
         assert len(owner.sessions) == 3 and all(session.closed for session in owner.sessions)
 

@@ -30,6 +30,8 @@ class AnswerResult:
     usage: dict
     trace: list[dict]
     status: str = "completed"
+    conversation_id: str | None = None
+    node_id: str | None = None
 
     @property
     def references(self):
