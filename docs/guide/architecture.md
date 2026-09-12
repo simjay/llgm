@@ -1,7 +1,7 @@
 # Architecture
 
-This tutorial follows an answer through LLGM. It builds on the Atlas example
-from [concepts](concepts.md): Database records the original database choice,
+This tutorial follows an answer through LLGM. It builds on the fictional Atlas
+project from [concepts](concepts.md): Database records the original database choice,
 Update changes that choice, Backups gives the retention period, and Registry
 records the deployment region.
 

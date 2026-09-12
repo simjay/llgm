@@ -45,6 +45,22 @@ REPOSITORY_DIRECTORIES = (
     "tests/fixtures",
 )
 PROSE_EXCLUSIONS = {"code", "pre", "script", "style", "svg", "textarea"}
+VOID_ELEMENTS = {
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "param",
+    "source",
+    "track",
+    "wbr",
+}
 PROSE_PUNCTUATION = {"—": "em dash", ";": "semicolon"}
 EXCLUDED_SITE_PATHS = (
     "development",
@@ -63,15 +79,20 @@ class Page(HTMLParser):
         super().__init__()
         self.ids: set[str] = set()
         self.links: set[str] = set()
+        self.sidebar_links: set[str] = set()
         self.targets: list[tuple[str, int]] = []
         self.text: list[str] = []
         self.prose: list[tuple[str, int]] = []
         self._excluded: list[str] = []
+        self._sidebar_stack: list[bool] = []
         self.feed(content)
 
     def handle_starttag(self, tag, attrs):
         """Retain targets and links that browsers can actually navigate."""
         attributes = dict(attrs)
+        classes = attributes.get("class", "").split()
+        if tag not in VOID_ELEMENTS and (self._sidebar_stack or "wy-menu-vertical" in classes):
+            self._sidebar_stack.append(tag == "li" and "toctree-l1" in classes)
         if tag in PROSE_EXCLUSIONS:
             self._excluded.append(tag)
         if attributes.get("id"):
@@ -80,6 +101,8 @@ class Page(HTMLParser):
             self.ids.add(attributes["name"])
         if tag == "a" and attributes.get("href"):
             self.links.add(attributes["href"])
+            if len(self._sidebar_stack) > 1 and self._sidebar_stack[-2]:
+                self.sidebar_links.add(attributes["href"])
         for name in ("href", "src"):
             if attributes.get(name):
                 self.targets.append((attributes[name], self.getpos()[0]))
@@ -92,6 +115,8 @@ class Page(HTMLParser):
         """Resume prose collection after code, style or other nonprose elements."""
         if tag in self._excluded:
             self._excluded.remove(tag)
+        if self._sidebar_stack and tag not in VOID_ELEMENTS:
+            self._sidebar_stack.pop()
 
     def handle_data(self, data):
         """Keep visible text so an unparsed autodoc directive cannot pass."""
@@ -271,7 +296,17 @@ def check_sources(root: Path, *, repository_links: bool = False) -> list[str]:
     return errors
 
 
-def check_rendered(html: Path) -> list[str]:
+def public_sources(docs: Path) -> list[Path]:
+    """List authored site pages without generated output or repository-only content."""
+    return [
+        path
+        for path in docs.rglob("*.md")
+        if "_build" not in path.parts
+        and not any(path.is_relative_to(docs / name) for name in EXCLUDED_SITE_PATHS)
+    ]
+
+
+def check_rendered(html: Path, docs: Path) -> list[str]:
     """Check generated page paths, fragments and actual API/index output offline."""
     pages = {path: Page(path.read_text(encoding="utf-8")) for path in html.rglob("*.html")}
     api_path = html / "reference/api.html"
@@ -299,18 +334,28 @@ def check_rendered(html: Path) -> list[str]:
             errors.append(f"reference/api.html: missing symbol anchor {anchor}")
         if f"reference/api.html#{anchor}" not in index.links:
             errors.append(f"genindex.html: missing API link {anchor}")
+    authored = {path.relative_to(docs).with_suffix(".html") for path in public_sources(docs)}
+    expected = {html / path for path in authored if path.parts[0] in {"guide", "reference"}}
+    for relative in sorted(authored | {Path("search.html"), Path("genindex.html")}):
+        path = html / relative
+        if path not in pages:
+            errors.append(f"{relative}: missing rendered page")
+            continue
+        linked = {
+            destination
+            for target in pages[path].sidebar_links
+            for destination, fragment in [local_target(path, target, html)]
+            if destination is not None and not fragment
+        }
+        for missing in sorted(expected - linked):
+            errors.append(f"{relative}: missing sidebar page link {missing.relative_to(html)}")
     return errors
 
 
 def check_publication(root: Path, html: Path) -> list[str]:
     """Reject leftover pages, source exports and Markdown downloads outside the public sources."""
     docs = root / "docs"
-    sources = [
-        path
-        for path in docs.rglob("*.md")
-        if "_build" not in path.parts
-        and not any(path.is_relative_to(docs / name) for name in EXCLUDED_SITE_PATHS)
-    ]
+    sources = public_sources(docs)
     pages = {path.relative_to(docs).with_suffix(".html") for path in sources}
     pages.update(Path(name) for name in ("genindex.html", "py-modindex.html", "search.html"))
     exports = {Path("_sources") / (str(path.relative_to(docs)) + ".txt") for path in sources}
@@ -371,7 +416,7 @@ def check(root: Path, html: Path, *, repository_links: bool = False) -> list[str
     root, html = root.resolve(), html.resolve()
     return (
         check_sources(root, repository_links=repository_links)
-        + check_rendered(html)
+        + check_rendered(html, root / "docs")
         + check_publication(root, html)
     )
 

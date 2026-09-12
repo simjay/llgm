@@ -29,6 +29,14 @@ def run_check(root, output, *, repository_links=False):
     )
 
 
+def sidebar(*targets):
+    """Render theme sidebar links separately from the document body."""
+    links = "".join(
+        f'<li class="toctree-l1"><a href="{target}">Page</a></li>' for target in targets
+    )
+    return f'<div class="wy-menu wy-menu-vertical"><ul>{links}</ul></div>'
+
+
 @pytest.fixture
 def rendered_docs(tmp_path):
     """Provide actual symbol targets and index links at the nested API location."""
@@ -56,14 +64,21 @@ def rendered_docs(tmp_path):
     write_file(
         output,
         "reference/api.html",
-        "".join(f'<section id="{anchor}">Symbol documentation</section>' for anchor in anchors),
+        sidebar("../guide/quickstart.html", "#")
+        + "".join(f'<section id="{anchor}">Symbol documentation</section>' for anchor in anchors),
     )
     write_file(
         output,
         "genindex.html",
-        "".join(f'<a href="reference/api.html#{anchor}">{anchor}</a>' for anchor in anchors),
+        sidebar("guide/quickstart.html", "reference/api.html")
+        + "".join(f'<a href="reference/api.html#{anchor}">{anchor}</a>' for anchor in anchors),
     )
+    for page in ("index.html", "search.html"):
+        write_file(output, page, sidebar("guide/quickstart.html", "reference/api.html"))
+    write_file(output, "guide/quickstart.html", sidebar("#", "../reference/api.html"))
     write_file(tmp_path, "README.md", "# Example\n")
+    write_file(tmp_path, "docs/index.md", "# LLGM\n")
+    write_file(tmp_path, "docs/guide/quickstart.md", "# Quickstart\n")
     write_file(tmp_path, "docs/reference/api.md", "# Public API\n")
     return output
 
@@ -381,6 +396,66 @@ def test_docs_check_rejects_broken_rendered_navigation(tmp_path, rendered_docs):
     assert "missing rendered fragment guide/quickstart.html#removed" in result.stdout
     assert "missing rendered target _static/missing.svg" in result.stdout
     assert "#installation" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "page, target",
+    [
+        ("index.html", "reference/api.html"),
+        ("guide/quickstart.html", "../reference/api.html"),
+        ("reference/api.html", "#"),
+        ("search.html", "reference/api.html"),
+        ("genindex.html", "reference/api.html"),
+    ],
+)
+def test_docs_check_requires_page_links_inside_every_sidebar(tmp_path, rendered_docs, page, target):
+    """Home, leaf and utility pages need full navigation even when body links work."""
+    path = rendered_docs / page
+    content = path.read_text()
+    link = f'<a href="{target}">Page</a>'
+    path.write_text(content.replace(link, "", 1) + link)
+    result = run_check(tmp_path, rendered_docs)
+    assert result.returncode == 1
+    assert f"{page}: missing sidebar page link reference/api.html" in result.stdout
+    assert "missing rendered target" not in result.stdout
+
+
+def test_docs_check_rejects_heading_links_as_page_navigation(tmp_path, rendered_docs):
+    """An API member link does not replace the API page entry in the sidebar."""
+    path = rendered_docs / "index.html"
+    content = path.read_text().replace(
+        'href="reference/api.html"', 'href="reference/api.html#llgm.LLGM"'
+    )
+    path.write_text(content)
+    result = run_check(tmp_path, rendered_docs)
+    assert result.returncode == 1
+    assert "index.html: missing sidebar page link reference/api.html" in result.stdout
+    assert "missing rendered fragment" not in result.stdout
+
+
+def test_docs_check_rejects_page_links_hidden_in_nested_navigation(tmp_path, rendered_docs):
+    """A nested page link remains hidden by theme CSS on home and search pages."""
+    path = rendered_docs / "index.html"
+    link = '<a href="reference/api.html">Page</a>'
+    path.write_text(
+        path.read_text().replace(
+            f'<li class="toctree-l1">{link}</li>',
+            f'<li class="toctree-l1">Reference<ul><li class="toctree-l2">{link}</li></ul></li>',
+        )
+    )
+    result = run_check(tmp_path, rendered_docs)
+    assert result.returncode == 1
+    assert "index.html: missing sidebar page link reference/api.html" in result.stdout
+    assert "missing rendered target" not in result.stdout
+
+
+def test_docs_check_requires_authored_pages_to_render(tmp_path, rendered_docs):
+    """An omitted source page cannot disappear from both output and navigation unnoticed."""
+    write_file(tmp_path, "docs/guide/architecture.md", "# Architecture\n")
+    result = run_check(tmp_path, rendered_docs)
+    assert result.returncode == 1
+    assert "guide/architecture.html: missing rendered page" in result.stdout
+    assert "index.html: missing sidebar page link guide/architecture.html" in result.stdout
 
 
 def test_docs_check_needs_no_repository_documents(tmp_path, rendered_docs):

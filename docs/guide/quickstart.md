@@ -39,8 +39,9 @@ See [configuration](configuration.md) for other providers and explicit
 
 ## Store a conversation and ask a question
 
-Save this script as `ask_atlas.py` and run `python ask_atlas.py`. It makes hosted
-model calls and stores data in `./memory` by default.
+The example stores a note about Atlas, a fictional project. Save it as
+`quickstart.py` and run `python quickstart.py`. It makes hosted model calls and
+stores data in `./memory` by default.
 
 ```python
 import asyncio

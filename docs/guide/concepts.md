@@ -10,7 +10,7 @@ graph theory or have a model account to follow it. The
 
 ## Start with a growing conversation history
 
-Suppose you have these conversations about a project called Atlas:
+Suppose you have these conversations about Atlas, a fictional project:
 
 | Conversation | What it records |
 | --- | --- |

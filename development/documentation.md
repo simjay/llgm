@@ -36,15 +36,17 @@ and build checks must work without `research/`, `agent-context/`, `AGENTS.md`,
 or maintainer guides. Verify behavior against the implementation. Internal notes
 can help locate code, but are not required reading or build inputs for users.
 
-## Navigation follows the directory tree
+## Navigation exposes every page
 
 The root README introduces the project and links to section entry points.
 Directory indexes explain their own contents. In the Sphinx site,
-`docs/index.md` owns the User guide and Reference indexes. Each section's
-`index.md` owns its pages through a local `toctree`. Every public page must be
-reachable through this hierarchy. Cross-links may lead directly to a page or
-heading when they explain a specific concept. They do not replace section
-navigation.
+`docs/index.md` owns the complete sidebar through two captioned `toctree` blocks:
+User guide and Reference. Each block lists its overview and every page directly.
+Keep these page links visible on the home page, guide pages, reference pages and
+search results. Only headings within an inactive page may collapse. Section
+indexes are reading guides and must not introduce another nested navigation tree.
+Cross-links may lead directly to a page or heading when they explain a concept.
+They do not replace sidebar navigation.
 
 The root `CONTRIBUTING.md` leads to `development/README.md`. Development pages
 use ordinary Markdown and relative links, without Sphinx directives. They are
@@ -114,6 +116,10 @@ experiment or strengthen its conclusions.
 Run `make docs` after documentation or navigation changes. It performs a strict
 Sphinx build and audits the rendered API, public authored and HTML links, prose
 punctuation, and exclusion of repository-only material from published output.
+It also requires every guide and reference page as a direct sidebar entry on
+all authored pages, search, and the generated index. Links in the page body or
+inside collapsed branches cannot satisfy that check. Verify desktop navigation
+and the mobile menu in a browser after changing the sidebar.
 It does not read or validate internal writing. Use `make docs-links` separately
 to check links across repository Markdown. It also checks local research and
 agent context when present, and tolerates their absence in a fresh clone.

@@ -1,7 +1,8 @@
 # Node search
 
-Suppose you have stored hundreds of conversations and ask, "Which database does
-Atlas use in production?" LLGM needs a few useful places to start reading.
+Suppose you have stored hundreds of conversations about Atlas, a fictional
+project. You ask, "Which database does Atlas use in production?" LLGM needs a
+few useful places to start reading.
 It searches small passages, then selects the nodes that contain those passages.
 Those starting nodes are called *seeds*.
 

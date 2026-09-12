@@ -11,7 +11,12 @@ extensions = ["myst_parser", "sphinx.ext.autodoc", "sphinxcontrib.mermaid"]
 source_suffix = {".md": "markdown"}
 html_theme = "sphinx_rtd_theme"
 html_title = f"LLGM {release}"
-html_theme_options = {"navigation_depth": 2, "logo_only": True}
+html_theme_options = {
+    "navigation_depth": 2,
+    "collapse_navigation": True,
+    "includehidden": True,
+    "logo_only": True,
+}
 html_logo = "_static/brand/llgm-logo-dark.svg"
 html_favicon = "_static/brand/llgm-favicon.svg"
 html_static_path = ["_static"]

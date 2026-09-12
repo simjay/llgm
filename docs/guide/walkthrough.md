@@ -1,8 +1,8 @@
 # Evidence walkthrough
 
 This tutorial follows evidence from storage to an answer, then shows how a
-correction changes what a later query reads. It uses the same Atlas example as
-the [concepts guide](concepts.md).
+correction changes what a later query reads. It uses the same fictional Atlas
+project as the [concepts guide](concepts.md).
 
 ## Follow one answer
 

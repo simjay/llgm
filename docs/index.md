@@ -1,40 +1,51 @@
 # LLGM documentation
 
-LLGM is a Python library for answering questions from stored conversations.
-It keeps the original text, searches for relevant passages, and lets models
-investigate the sources they need. The answer includes references to the evidence
-used to produce it.
-
-The library is an unpublished alpha installed from source. Full inference needs
-Docker and configured model access. See [Quickstart](guide/quickstart.md) to run
-your first example and [Capabilities and limits](reference/implementation-status.md)
-before choosing features for an application.
-
-| Section | What you will find |
-| --- | --- |
-| [User guide](guide/index.md) | Install and configure the library, understand its architecture, and follow working examples. |
-| [Reference](reference/index.md) | Public Python interfaces and the limits of the current implementation. |
+LLGM is a Python library for answering questions across stored conversations.
+It keeps the original text, finds relevant passages, and lets smaller models
+investigate the evidence before a root model writes an answer with references.
 
 ## Start here
 
-To understand how it works, follow these tutorials in order:
+- **Run your first example:** [Quickstart](guide/quickstart.md) takes you from
+  installation to storing a conversation and asking a question.
+- **Understand the design:** [Concepts](guide/concepts.md) introduces the pieces
+  through an example, then [Architecture](guide/architecture.md) follows an answer
+  from search to synthesis.
 
-1. [Concepts](guide/concepts.md): what is stored, what a node does, and how an
-   answer comes together, starting with a concrete example.
-2. [Architecture](guide/architecture.md): how stored evidence becomes an answer
-   and how storage, retrieval and model access fit together.
-3. [Node search](guide/node-search.md): how passages become starting nodes and
-   how the models find more information when needed.
-4. [Evidence walkthrough](guide/walkthrough.md): follow a database decision
-   and a later correction back to their original sources.
+LLGM is an alpha installed from source. Inference requires Python 3.11 or later,
+Docker, and model API credentials.
 
-Use [Configuration](guide/configuration.md) to change providers, storage, or
-resource limits. The [API reference](reference/api.md) lists Python interfaces.
+## Explore the library
+
+Learn how [node search](guide/node-search.md) chooses where to read, or follow the
+[evidence walkthrough](guide/walkthrough.md) to trace an answer and apply a
+correction. Use [Configuration](guide/configuration.md) to choose providers,
+storage, and resource limits.
+
+The [API reference](reference/api.md) documents Python interfaces.
+[Capabilities and limits](reference/implementation-status.md) explains what the
+current implementation supports.
 
 ```{toctree}
+:caption: User guide
 :maxdepth: 2
 :hidden:
 
-guide/index
-reference/index
+Overview <guide/index>
+guide/quickstart
+guide/concepts
+guide/architecture
+guide/node-search
+guide/walkthrough
+guide/configuration
+```
+
+```{toctree}
+:caption: Reference
+:maxdepth: 2
+:hidden:
+
+Overview <reference/index>
+reference/api
+reference/implementation-status
 ```

@@ -16,7 +16,7 @@
 
 <p align="center">
   <a href="#getting-started">Getting started</a> ·
-  <a href="docs/index.md">Documentation</a> ·
+  <a href="https://llgm.readthedocs.io/en/latest/">Documentation</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
@@ -51,8 +51,9 @@ export LLGM_ROOT_MODEL=YOUR_ROOT_MODEL_ID
 export LLGM_SIDECAR_MODEL=YOUR_SMALLER_MODEL_ID
 ```
 
-Save this as `ask_atlas.py` and run `python ask_atlas.py`. It makes hosted model
-calls and stores the conversation in `./memory`:
+The example stores a note about Atlas, a fictional project. Save it as
+`quickstart.py` and run `python quickstart.py`. It makes hosted model calls and
+stores the conversation in `./memory`:
 
 ```python
 import asyncio
