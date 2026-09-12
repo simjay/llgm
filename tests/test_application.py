@@ -7,7 +7,6 @@ measure hosted-model reasoning or semantic link accuracy.
 import asyncio
 import json
 import tempfile
-import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -649,26 +648,28 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             [operation("finish", answer="Unknown", citations=[], unresolved=["No evidence"])]
         )
         app = self.app(root=root)
-        original = Evidence.open
-        opened = []
+        evidence = await Evidence.open(self.workspace, passage_chars=app.passage_chars)
+        self.addAsyncCleanup(evidence.close)
+        clock = NS(now=0.0)
 
         async def slow_open(*args, **kwargs):
-            """Delay a real completed index without yielding so explicit elapsed checks are exercised."""
-            evidence = await original(*args, **kwargs)
-            opened.append(evidence)
-            time.sleep(0.04)
+            """Advance application time without yielding, then return the real prepared index."""
+            clock.now += 0.04
             return evidence
 
-        with patch("llgm.llgm.Evidence.open", side_effect=slow_open):
-            result = await app.answer("Question", budget=Budget(timeout_seconds=0.01))
+        with (
+            patch("llgm.llgm.Evidence.open", side_effect=slow_open),
+            patch("llgm.llgm.time", NS(monotonic=lambda: clock.now)),
+        ):
+            result = await app.answer("Question", node_id="a", budget=Budget(timeout_seconds=0.01))
         self.assertEqual(result.status, "budget_exhausted")
         self.assertEqual(root.requests, [])
         self.assertEqual(result.usage["model_calls"], 0)
-        self.assertGreaterEqual(result.usage["preparation_seconds"], 0.04)
+        self.assertEqual(result.usage["preparation_seconds"], 0.04)
         self.assertEqual(result.usage["inference_seconds"], 0)
         self.assertGreaterEqual(result.usage["total_seconds"], result.usage["preparation_seconds"])
         with self.assertRaises(ConfigurationError):
-            await opened[0].search("Orion", 1)
+            await evidence.search("Orion", 1)
 
     async def test_asynchronous_preparation_timeout_retains_timing_and_no_model_attempt(self):
         """An awaiting preparation task is cancelled at the shared deadline and recorded explicitly."""
