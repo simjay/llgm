@@ -24,7 +24,10 @@ usage have observable tests. Estimates are clearly separate from provider bills.
 
 ## T07: Improve complementary retrieval
 
-Both retriever adapters exist. Combined retrieval is not an application default.
+Combined retrieval is now the configured application and CLI viewer default.
+Live workspace transport and generation reuse have deterministic contract tests.
+The new tiny-corpus native ColBERT integration test remains an explicit live gate.
+Full source snapshot uploads and PLAID rebuilds on source changes remain a scale limitation.
 Compare BM25, ColBERTv2/PLAID and combined candidate pools under fixed seed and
 evidence limits. The [LongMemEval runbook](../experiments/longmemeval.md) locates tooling.
 **Done when:** Retained rankings and matched answer trials separate candidate
@@ -57,7 +60,7 @@ retrieval, provenance, query cost and retention, with visibility distinct from d
 Measure growing histories and complete restore and service-boundary contracts.
 Start with [storage guidance](../docs/guide/configuration.md#storage-choices) and [scaling probes](../src/llgm/evaluation/scaling.py).
 **Done when:** Recovery preserves references and retry semantics under failures,
-and measurements separate indexing, source reads, Docker overhead and concurrency.
+and measurements separate indexing, source reads, sandbox overhead and concurrency.
 
 ## T12: Complete release delivery
 
@@ -67,7 +70,7 @@ GitHub `pypi` environment and PyPI publisher registration are external setup
 requirements. Adding the workflow does not establish successful publication.
 
 Validate installable artifacts, package metadata, README assets and versioned
-documentation through the [publishing guide](../development/publishing.md).
+documentation through the [publishing guide](../docs/contributing/publishing.md).
 **Done when:** A released distribution reproduces documented workflows outside
 the checkout, and release documentation states the capabilities actually verified.
 
@@ -75,8 +78,19 @@ the checkout, and release documentation states the capabilities actually verifie
 
 Conversation routing and segmented turn storage are implemented. Deterministic
 checks protect node reuse, split decisions, restart, citations and bounded span
-I/O. Hosted routing quality and huge-node answer quality remain unmeasured.
+I/O. Hosted routing quality and huge-node answer quality remain unmeasured. The
+[conversation guide](../docs/guide/conversations.md) owns the current user contract.
 Imported batches route as one unit. Splitting within a mixed-topic batch remains
 open. Compare archive size and node size independently with a direct-reader
 control. **Done when:** Retained measurements cover false splits, missed splits,
 topic returns, large turns, per-node RLM work, graph growth and complete costs.
+
+## T14: Measure DSPy reader quality
+
+The node readers use DSPy's loop with the
+Deno/Pyodide sandbox. Deterministic contracts and real sandbox checks protect
+execution, citation admission and cancellation. Hosted quality has not been
+measured for this controller. Use the new DSPy protocol variants in the
+[runbook](../experiments/longmemeval.md), preserving historical Docker runs.
+**Done when:** Approved hosted trials retain complete predictions, failures,
+source and runtime identities, costs and comparisons to the frozen controls.

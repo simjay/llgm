@@ -8,13 +8,15 @@ application, and [configuration](../guide/configuration.md) explains the default
 | To do this | Start with |
 | --- | --- |
 | Open an application from environment or TOML settings | [`Settings`](#llgm.Settings) and [`LLGM.from_settings()`](#llgm.LLGM.from_settings) |
-| Store a conversation | [`Conversation.from_turns()`](#llgm.Conversation.from_turns) and [`LLGM.ingest()`](#llgm.LLGM.ingest) |
-| Ask a question and inspect its outcome | [`LLGM.answer()`](#llgm.LLGM.answer) and [`AnswerResult`](#llgm.AnswerResult) |
+| Continue a chat or ask without saving turns | [`LLGM.answer()`](#llgm.LLGM.answer) and the [conversation guide](../guide/conversations.md) |
+| Import earlier history | [`LLGM.ingest()`](#llgm.LLGM.ingest), with [`Conversation`](#llgm.Conversation) for metadata |
+| Inspect an answer's status and sources | [`AnswerResult`](#llgm.AnswerResult) |
 | Change limits for one answer | [`Budget`](#llgm.Budget) and the [override example](../guide/configuration.md#change-limits-for-one-answer) |
 | Read an original source or record an explicit correction | [`Workspace`](#llgm.Workspace) |
 | Search passages or inspect relationships | [`Evidence`](#llgm.Evidence) |
 | Choose a provider or add your own client | [Models and embeddings](#models-and-embeddings) |
 | Supply a different search backend | [Retrieval](#retrieval) and the [factory example](../guide/configuration.md#use-your-own-search-backend) |
+| Browse stored topics and search results | [Graph viewer](#graph-viewer) |
 
 ## Application and settings
 
@@ -185,7 +187,9 @@ responses. It does not call a model.
 A `Retriever` returns ranked `SearchHit` objects containing source passages and
 references. It does not generate an answer. An injected retriever must index
 sources from the application's workspace and remain current as sources change.
-See [node search](../guide/node-search.md) for how results become starting nodes.
+Configured applications use `WorkspaceHybridRetriever` for BM25 and ColBERT
+search on Modal. The local `sqlite_fts5` option uses `SQLiteBM25Retriever`.
+See [node search](../guide/node-search.md) for ranking and seed selection.
 
 ```{eval-rst}
 .. autoclass:: llgm.retrieval.Retriever
@@ -211,12 +215,26 @@ See [node search](../guide/node-search.md) for how results become starting nodes
 .. autofunction:: llgm.retrieval.corpus_fingerprint
 ```
 
+### Configured workspace search
+
+The settings factory and CLI viewer share a workspace retriever across their
+evidence handles. It refreshes source generations on search. Direct
+`Evidence.open(workspace)` keeps local BM25 as its default. See
+[search configuration](../guide/configuration.md#search-backend).
+
+```{eval-rst}
+.. autoclass:: llgm.retrieval.workspace.WorkspaceHybridRetriever
+   :members: search, descriptor
+```
+
 ### ColBERT and PLAID
 
 The local adapter requires its optional dependencies and a prepared checkpoint.
 The Modal adapter calls an already deployed retrieval service. Neither an import
-nor a connection builds an index. Keep the checkpoint, tokenizer, passage mapping,
-and index configuration consistent when reopening an index.
+nor a fixed-index connection builds an index. This differs from configured
+workspace search, which prepares a generation lazily. Keep the checkpoint,
+tokenizer, passage mapping and configuration consistent when reopening an index.
+`ExactColBERTRetriever` uses the same encoder for corpora below 64 passages.
 
 ```{eval-rst}
 .. autoclass:: llgm.retrieval.colbert.ColBERTConfig
@@ -227,6 +245,9 @@ and index configuration consistent when reopening an index.
 
 .. autoclass:: llgm.retrieval.modal.ModalColBERTRetriever
    :members: connect, search, descriptor
+
+.. autoclass:: llgm.retrieval.colbert_exact.ExactColBERTRetriever
+   :members: search, descriptor
 
 .. autoclass:: llgm.retrieval.ColBERTTokenizer
    :members:
@@ -310,11 +331,13 @@ See [architecture](../guide/architecture.md) for the complete question flow.
 ## Storage transition
 
 ```{eval-rst}
+.. autofunction:: llgm.memory.migration.copy_schema3_workspace
+
 .. autofunction:: llgm.memory.migration.copy_schema2_workspace
 ```
 
-The converter preserves the original local schema-2 workspace and requires
-explicit classifications before copying its records into schema 5. See
+Both converters preserve the original local workspace and copy it to schema 5.
+The schema-2 converter additionally requires explicit journal classifications. See
 [existing databases](../guide/configuration.md#existing-databases).
 
 ## Errors
@@ -341,64 +364,32 @@ See [result handling](../guide/quickstart.md#understand-the-result).
 .. autoclass:: llgm.core.errors.SchemaError
 ```
 
-## Specialized execution interfaces
+## DSPy Python execution
 
-These separate executors are for applications that supply context or control
-retrieval outside `LLGM`. They do not extend an already constructed `LLGM`
-instance. They borrow caller-owned clients and have their own operations and
-stopping rules. Most applications can use the integrated workflow above.
+`SandboxConfig` controls byte admission and interpreter deadlines for the
+integrated application. `interpreter_factory` accepts a DSPy `CodeInterpreter`
+factory. Each factory call must return a fresh interpreter. The default is
+DSPy's Deno/Pyodide `PythonInterpreter` without host access permissions.
 
-### Structured node queries
-
-```{eval-rst}
-.. autoclass:: llgm.inference.recursive.RecursiveRuntime
-   :members:
-```
-
-### Iterative retrieval
-
-Construct `EvidenceReader` with a model, a retriever, and a search policy.
-Pass them as `IterativeRuntime(main_model=..., reader=...)`. The `reader`
-argument is an `EvidenceReader` component containing its model and retriever.
-The caller closes the model and retrieval resources.
+Node readers use `query_node(node_id, question)` to start another reader with
+isolated context. DSPy's `llm_query(prompt)` makes a plain reader-model call.
+All calls, including extraction after `max_steps` action iterations, share the
+answer budget. See [the answer flow](../guide/architecture.md#how-an-answer-runs).
 
 ```{eval-rst}
-.. autoclass:: llgm.inference.iterative.IterativeRuntime
-   :members:
-
-.. autoclass:: llgm.inference.iterative.EvidenceReader
-   :members:
-```
-
-### Docker Python execution
-
-`DockerREPLConfig` controls interpreter resources for the integrated application
-as well as direct Python execution. `RLMRuntime` is the separate executor for
-caller-supplied context.
-
-```{eval-rst}
-.. autoclass:: llgm.inference.repl.DockerREPLConfig
-   :members:
-
-.. autoclass:: llgm.inference.repl.DockerREPL
-   :members:
-
-.. autoclass:: llgm.inference.repl.REPLResult
-   :members:
-
-.. autoclass:: llgm.inference.repl.REPLQueryEvent
+.. autoclass:: llgm.inference.repl.SandboxConfig
    :members:
 
 .. autoclass:: llgm.inference.repl.REPLError
 
 .. autoclass:: llgm.inference.repl.REPLTimeoutError
-
-.. autoclass:: llgm.inference.rlm.RLMRuntime
-   :members:
-
-.. autoclass:: llgm.inference.rlm.RLMResult
-   :members:
 ```
 
-Schema-3 local workspaces can be copied with
-`llgm migrate OLD_WORKSPACE NEW_WORKSPACE`.
+## Graph viewer
+
+See the [graph viewer guide](../guide/graph-viewer.md) for CLI usage and browsing.
+
+```{eval-rst}
+.. autoclass:: llgm.viewer.GraphViewer
+   :members: from_application, search, serve_forever
+```

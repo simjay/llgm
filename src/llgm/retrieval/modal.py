@@ -11,16 +11,20 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib
-import math
 import re
 import time
 from copy import deepcopy
 from typing import Any, Awaitable, Callable, Iterable
 
 from llgm.core.errors import CapabilityError, ConfigurationError
-from llgm.retrieval.base import SearchHit, SearchPassage, check_passages, corpus_fingerprint
+from llgm.retrieval._colbert import (
+    OFFICIAL_REPOSITORY,
+    finite_number,
+    ranked_hits,
+    snapshot_passages,
+)
+from llgm.retrieval.base import SearchHit, SearchPassage, corpus_fingerprint
 
-_OFFICIAL_REPOSITORY = "https://github.com/stanford-futuredata/ColBERT"
 SearchRPC = Callable[[str, str, int], Awaitable[dict[str, Any]]]
 
 
@@ -51,34 +55,6 @@ def _target(
             raise ConfigurationError(
                 f"Expected ColBERT {name} must be {length} lowercase hex digits"
             )
-
-
-def _snapshot(passages: Iterable[SearchPassage]) -> tuple[SearchPassage, ...]:
-    """Own passage metadata independently of the caller's mutable dictionaries."""
-    result = tuple(deepcopy(tuple(passages)))
-    if not result or any(
-        not isinstance(passage, SearchPassage)
-        or not isinstance(passage.passage_id, str)
-        or not passage.passage_id
-        for passage in result
-    ):
-        raise ConfigurationError("Modal ColBERT requires a nonempty corpus with text passage IDs")
-    check_passages(result)
-    try:
-        corpus_fingerprint(result)
-    except (TypeError, ValueError) as exc:
-        raise ConfigurationError(
-            "Modal ColBERT passages must have JSON-serializable metadata"
-        ) from exc
-    return result
-
-
-def _number(value: Any) -> bool:
-    """Accept finite JSON numbers while excluding booleans and numeric strings."""
-    try:
-        return type(value) in (int, float) and math.isfinite(value)
-    except OverflowError:
-        return False
 
 
 class ModalColBERTRetriever:
@@ -113,7 +89,7 @@ class ModalColBERTRetriever:
         )
         if not callable(search_rpc):
             raise ConfigurationError("Modal ColBERT search_rpc must be an async callable")
-        passages = _snapshot(passages)
+        passages = snapshot_passages(passages)
         self._passages = {passage.passage_id: passage for passage in passages}
         self._fingerprint = corpus_fingerprint(passages)
         self._index_id = index_id
@@ -134,7 +110,7 @@ class ModalColBERTRetriever:
             or descriptor.get("corpus_fingerprint") != self._fingerprint
             or type(descriptor.get("passage_count")) is not int
             or descriptor["passage_count"] != len(passages)
-            or implementation.get("repository") != _OFFICIAL_REPOSITORY
+            or implementation.get("repository") != OFFICIAL_REPOSITORY
             or not _digest(checkpoint, 64)
             or not _digest(revision, 40)
             or implementation.get("revision") != revision
@@ -181,7 +157,7 @@ class ModalColBERTRetriever:
             expected_checkpoint_sha256,
             expected_repository_revision,
         )
-        passages = _snapshot(passages)
+        passages = snapshot_passages(passages)
         try:
             modal = importlib.import_module("modal")
         except ImportError as exc:
@@ -240,32 +216,10 @@ class ModalColBERTRetriever:
             response = await self._search_rpc(self._index_id, query, k)
             self._identity(response)
             elapsed = response.get("search_seconds")
-            if not _number(elapsed) or elapsed < 0:
+            if not finite_number(elapsed) or elapsed < 0:
                 raise CapabilityError("Modal ColBERT response has invalid server search timing")
             event["server_search_seconds"] = float(elapsed)
-            values = response.get("hits")
-            if not isinstance(values, list) or len(values) > min(k, len(self._passages)):
-                raise CapabilityError("Modal ColBERT response has an invalid hit count")
-            hits: list[SearchHit] = []
-            seen: set[str] = set()
-            for rank, value in enumerate(values, 1):
-                if not isinstance(value, dict):
-                    raise CapabilityError("Modal ColBERT response contains a malformed hit")
-                passage_id = value.get("passage_id")
-                score = value.get("score")
-                if (
-                    not isinstance(passage_id, str)
-                    or passage_id not in self._passages
-                    or passage_id in seen
-                    or type(value.get("rank")) is not int
-                    or value["rank"] != rank
-                    or not _number(score)
-                ):
-                    raise CapabilityError(
-                        "Modal ColBERT response contains invalid passage IDs, ranks or scores"
-                    )
-                seen.add(passage_id)
-                hits.append(SearchHit(deepcopy(self._passages[passage_id]), float(score), rank))
+            hits = ranked_hits(response.get("hits"), self._passages, k)
             event.update(returned=len(hits), status="succeeded")
             return hits
         except asyncio.CancelledError:

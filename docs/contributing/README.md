@@ -1,8 +1,8 @@
-# Development
+# Contributing to LLGM
 
 These repository guides are for contributors and maintainers changing the
 library, its documentation, or its evaluation tooling. Library users start with
-the [user documentation](../docs/index.md). The setup and command reference
+the [user documentation](../index.md). The setup and command reference
 below apply from the repository root.
 
 | Guide | Purpose |
@@ -21,7 +21,23 @@ Modal commands run only when their targets are selected.
 
 Make targets cover repeated development tasks and the current evaluation.
 Historical experiments keep their direct reproduction commands in
-[the experiment guides](../experiments/README.md).
+[the experiment guides](../../experiments/README.md).
+
+### Open the graph viewer
+
+After saving a conversation, run `make viewer`. It loads `.env` when present and
+opens the saved workspace in a browser. Override `WORKSPACE`, `CONVERSATION_ID`,
+`VIEWER_PORT`, or `ENV_FILE` on the command line. `ENV_FILE=` skips dotenv loading.
+Viewing the graph needs no model clients. The search bar uses the same configured
+backend as `LLGM.from_settings()`.
+
+Hybrid search defaults to the authenticated Modal service. Run `make setup-colbert`,
+authenticate with `.venv/bin/modal setup`, prepare the pinned assets with
+`make colbert-prepare`, then deploy with `make colbert-deploy`. Asset preparation
+and deployment are explicit remote operations. The current asset target also
+prepares the pinned diagnostic dataset. Source search uploads the workspace's
+source snapshot to this service and can incur GPU charges. Unchanged generations
+are reused. For offline search, set `LLGM_RETRIEVER_BACKEND=sqlite_fts5`.
 
 ## Set up a checkout
 
@@ -59,7 +75,7 @@ the OpenAI adapter to the default environment is an explicit installation:
 uv pip install --python .venv/bin/python -e '.[openai]'
 ```
 
-See [configuration](../docs/guide/configuration.md) for adapter settings and
+See [configuration](../guide/configuration.md) for adapter settings and
 [testing](testing.md) for integration prerequisites. Core imports and ordinary
 checks require neither provider credentials nor model downloads.
 
@@ -68,26 +84,36 @@ SDK without installing local GPU dependencies. The separately invoked
 `make colbert-prepare` and `make test-colbert` use the authenticated Modal
 workspace. See [integration testing](testing.md) for setup,
 artifacts and manual CI. Frozen commands and protocol details live in the
-[experiment index](../experiments/README.md).
+[experiment index](../../experiments/README.md).
 
 ## Find the owning code
 
-The [user architecture](../docs/guide/architecture.md) explains how the library
+The [user architecture](../guide/architecture.md) explains how the library
 fits into an application. This map identifies where to change the implementation.
 
-| Responsibility | Owning code |
-| --- | --- |
-| Application construction, seed admission, and public operations | [`LLGM`](../src/llgm/llgm.py) |
-| Shared records, settings, errors, and time semantics | [`core/`](../src/llgm/core/) |
-| Atomic source publication and index ownership | [`memory/workspace.py`](../src/llgm/memory/workspace.py) |
-| Evidence resolution, search, and graph access | [`memory/evidence.py`](../src/llgm/memory/evidence.py) |
-| Effective reads and query-local evidence | [`memory/query.py`](../src/llgm/memory/query.py) |
-| Edge and journal proposals | [`memory/maintenance.py`](../src/llgm/memory/maintenance.py) |
-| Seed scheduling, recursive branches, and final synthesis | [`inference/nodes.py`](../src/llgm/inference/nodes.py) |
-| Isolated Python execution and container cleanup | [`inference/repl.py`](../src/llgm/inference/repl.py) |
-| Shared resource admission and usage accounting | [`inference/budget.py`](../src/llgm/inference/budget.py) |
-| Replaceable provider, retrieval, and persistence adapters | [`models/`](../src/llgm/models/), [`retrieval/`](../src/llgm/retrieval/), [`storage/`](../src/llgm/storage/) |
-| Benchmark preparation, generation, judging, and reporting | [`evaluation/`](../src/llgm/evaluation/) |
+| Change | Owning code | Relevant tests |
+| --- | --- | --- |
+| Application construction, conversations, imports and seed selection | [llgm.py](../../src/llgm/llgm.py), [topics.py](../../src/llgm/memory/topics.py) | [Application](../../tests/test_application.py), [entry point](../../tests/test_application_entrypoint.py), [conversations](../../tests/test_conversations.py) |
+| Records, references, settings and time selectors | [core](../../src/llgm/core) | [Storage](../../tests/test_storage.py), [settings](../../tests/test_config.py), [environment files](../../tests/test_env_file.py) |
+| Topic append storage, source publication, edges and operational journals | [workspace.py](../../src/llgm/memory/workspace.py) | [Storage](../../tests/test_storage.py), [edges](../../tests/test_edges.py), [journal compaction](../../tests/test_journal_compaction.py) |
+| Raw evidence, amendments and query scope | [evidence.py](../../src/llgm/memory/evidence.py), [query.py](../../src/llgm/memory/query.py) | [Evidence](../../tests/test_evidence.py), [effective reads](../../tests/test_effective_reads.py) |
+| Relationship proposals and maintenance policy | [maintenance.py](../../src/llgm/memory/maintenance.py) | [Application](../../tests/test_application.py) |
+| Blob storage, local indexing and explicit migration | [storage](../../src/llgm/storage), [migration.py](../../src/llgm/memory/migration.py) | [Storage](../../tests/test_storage.py), [index](../../tests/test_lexical_index.py), [migration](../../tests/test_storage_migration.py) |
+| Seed delegates, child queries and final synthesis | [nodes.py](../../src/llgm/inference/nodes.py) | [Node runtime](../../tests/test_nodes.py) |
+| Shared budgets, result records and DSPy execution | [inference](../../src/llgm/inference) | [Budgets](../../tests/test_budget.py), [REPL](../../tests/test_repl.py), [Sandbox](../../tests/test_repl_sandbox.py) |
+| Provider requests, response handling and embeddings | [models](../../src/llgm/models) | [Model contracts](../../tests/test_models.py), [live providers](../../tests/integration/test_live_providers.py) |
+| Passage ranking and fixed-index retrieval | [retrieval](../../src/llgm/retrieval) | [Retrieval](../../tests/test_retrieval.py), [ColBERT ranking](../../tests/test_colbert_ranking.py), [Modal adapter](../../tests/test_modal_retriever.py) |
+| Growing hybrid indexes and configured search | [workspace.py](../../src/llgm/retrieval/workspace.py), [live.py](../../src/llgm/retrieval/live.py), [colbert_exact.py](../../src/llgm/retrieval/colbert_exact.py) | [Workspace retrieval](../../tests/test_workspace_retrieval.py), [index service](../../tests/test_live_index_service.py) |
+| Local graph browsing and HTTP access | [viewer](../../src/llgm/viewer) | [Viewer](../../tests/test_viewer.py) |
+| Remote ColBERT jobs and persisted index records | [colbert_modal.py](../../tools/colbert_modal.py), [colbert_worker.py](../../tools/colbert_worker.py) | [Job contracts](../../tests/test_colbert_modal.py), [worker](../../tests/test_colbert_worker.py) |
+| Evaluation preparation, execution and accounting | [evaluation](../../src/llgm/evaluation) | [Memory benchmark](../../tests/test_memory_benchmark.py), [costs](../../tests/test_costs.py), [judging](../../tests/test_answer_judging.py) |
+| CLI behavior | [cli.py](../../src/llgm/cli.py) | [CLI](../../tests/test_cli.py) |
+| Documentation publication and distribution contents | [check_docs.py](../../tools/check_docs.py), [pyproject.toml](../../pyproject.toml) | [Documentation](../../tests/test_docs.py), [runnable tutorials](../../tests/test_documented_examples.py), [packaging](../../tests/test_packaging.py) |
+
+`DSPySession.run()` owns its worker and host callback cleanup through completion,
+failure and repeated cancellation. Node orchestration awaits that boundary and
+records the outcome. DSPy owns the interpreter lifecycle and action loop.
+LLGM's host callbacks enforce shared budgets and canonical evidence visibility.
 
 The primary LongMemEval runner freezes inputs and scheduled trials, records
 physical model calls, and separates generation from judging. Its priced admission
@@ -95,7 +121,41 @@ and token pacing are evaluation controls. Ordinary `LLGM` calls use the runtime'
 call, context, and time budgets without enforcing a dollar limit. Framework
 transport tests do not establish a completed Mem0 or Graphiti integration. See
 [evaluation testing](testing.md#longmemeval-evaluation) and the
-[experiment index](../experiments/README.md) for the owning methods and commands.
+[experiment index](../../experiments/README.md) for the owning methods and commands.
+
+### Runtime and adapter boundaries
+
+The application and direct seed-based queries share `NodeRuntime`. DSPySession
+provides its execution boundary. Keep graph admission and provider accounting
+in this path instead of adding parallel answer controllers.
+
+Keep optional provider and GPU imports lazy. The remote ColBERT transport validates
+a pinned index against local corpus identity. Native GPU dependencies belong in
+its worker environment. The local ColBERT adapter has separate prerequisites.
+Both use [shared ColBERT checks](../../src/llgm/retrieval/_colbert.py) for corpus
+ownership and ranked results. Indexing and search call the official engine
+directly. LLGM owns index provenance, encoder limits and authenticated transport.
+The configured workspace retriever additionally uploads changed source snapshots
+and uses the deployment's live index service. Fixed benchmark indexes keep their
+separate identities and protocol. See the
+[ColBERT runbook](../../experiments/colbert.md#application-and-viewer-search).
+
+## Inspect saved memory
+
+After an application has created a workspace, run:
+
+```sh
+make viewer WORKSPACE=./memory CONVERSATION_ID=atlas
+```
+
+This target loads `.env` when present. `ENV_FILE=another.env` selects a file,
+and `ENV_FILE=` skips loading one. Existing environment variables still win.
+`VIEWER_PORT=0` selects an available port. Stop the server with Ctrl-C.
+
+Browsing records does not run answer models. Search uses the configured backend,
+including remote indexing and retrieval for `hybrid`. Set
+`LLGM_RETRIEVER_BACKEND=sqlite_fts5` for local BM25. The
+[user guide](../guide/graph-viewer.md) explains graph selection and record inspection.
 
 ## Check a change
 
@@ -109,7 +169,7 @@ transport tests do not establish a completed Mem0 or Graphiti integration. See
 | `make test-data` | Local checksum-pinned LongMemEval ingest, retrieval, immutable-source, and current-journal checks |
 | `make coverage` | Deterministic tests under branch coverage, with terminal, JSON, XML, and HTML reports in `runs/coverage/unit/` |
 
-`check` does not install dependencies or invoke hosted providers, Docker, S3 or
+`check` does not install dependencies or invoke hosted providers, Deno, S3 or
 ColBERT. Live integration tests have separate explicit gates documented in
 [testing](testing.md). Keep those flags local to their intended command.
 
@@ -133,8 +193,8 @@ For a focused edit, run the owning test file directly before the broader check:
 
 Prefer tests of observable contracts: canonical source attribution, immutable
 references, current journal visibility, resource limits, and retained failures. The
-[architecture guide](../docs/guide/architecture.md) identifies the application and runtime
-boundaries. The [implementation status](../docs/reference/implementation-status.md) separates
+[architecture guide](../guide/architecture.md) identifies the application and runtime
+boundaries. The [implementation status](../reference/implementation-status.md) separates
 supported contracts from unimplemented capabilities.
 
 ## Build and preview documentation
@@ -148,8 +208,9 @@ The docs target performs a fresh Sphinx HTML build with warnings treated as
 errors, then runs `tools/check_docs.py` to audit rendered API anchors,
 local navigation, public authored links, prose punctuation, and the public
 documentation boundary.
-Published prose is authored in `docs/`. API reference is extracted from library
-docstrings. The build does not publish development guides, benchmark runbooks,
+Public guides live in `docs/guide/` and `docs/reference/`. Contributor
+guides live in `docs/contributing/` and are excluded by Sphinx configuration.
+API reference is extracted from library docstrings. The build does not publish development guides, benchmark runbooks,
 repository research, agent context, or external Markdown indexes. HTML output is
 in `docs/_build/html/`.
 The build does not read or validate research, agent context, or maintainer guides.

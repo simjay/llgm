@@ -1,7 +1,7 @@
 # Agent instructions
 
 Before changing this repository, read [Contributing](CONTRIBUTING.md) and
-[documentation maintenance](development/documentation.md). These tracked guides
+[documentation maintenance](docs/contributing/documentation.md). These tracked guides
 are the canonical contributor instructions. The current user request determines
 the task.
 
@@ -16,20 +16,21 @@ changing a contract. Start with `git status --short` and preserve unrelated edit
 Use `make setup` for the local development environment. Run affected tests first,
 then `make check` for deterministic validation. Use `make docs` for the user site,
 `make docs-links` for repository guidance, and `make build` for packaging changes.
-The [testing guide](development/testing.md) owns optional integration prerequisites
+The [testing guide](docs/contributing/testing.md) owns optional integration prerequisites
 and commands. Test availability does not establish that a service was exercised.
 
 ## Code and documentation
 
 Keep interfaces small and explicit. Add docstrings to every Python definition
 and comments where they explain a constraint or non-obvious choice. Follow
-[code standards](development/standards.md). Prefer observable contract tests to
+[code standards](docs/contributing/standards.md). Prefer observable contract tests to
 tests that repeat the implementation.
 
-Agent context supports coding agents and does not replace contributor guidance. `docs/`
-is exclusively for library end users: installation, usage, configuration, concepts,
-architecture and API reference. Contributor setup, tests, CI, publishing, branding
-and documentation maintenance belong in repository-only `development/`, reached
+Agent context supports coding agents and does not replace contributor guidance.
+`docs/guide/` and `docs/reference/` serve library end users: installation, usage,
+configuration, concepts, architecture and API reference. Contributor setup, tests,
+CI, publishing, branding and documentation maintenance belong in repository-only
+`docs/contributing/`, reached
 from `CONTRIBUTING.md`. Research proposals and dated measurements belong in local
 `research/`. The six curated Markdown files allowed by `.gitignore` under
 `agent-context/` are tracked repository context. Other files there, including
@@ -38,7 +39,7 @@ research, and never copy their contents into tracked files. Tracked guides,
 tests, and builds must work without private notes. Do not include any agent
 context in the user site, its downloads, or package archives.
 Keep benchmark run instructions in `experiments/`. Follow the ownership rules in
-[documentation maintenance](development/documentation.md).
+[documentation maintenance](docs/contributing/documentation.md).
 
 User docs must read and build independently of research and agent context.
 Teach concepts and architecture through concrete examples. Use plain prose with

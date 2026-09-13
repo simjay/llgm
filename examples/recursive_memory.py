@@ -1,9 +1,11 @@
 """Hosted persistent-memory example that makes configured model API calls.
 
-Requires Docker and its configured local Python image.
+Requires the rlm extra with DSPy and Deno.
 Configure LLGM_MAIN_MODEL, LLGM_READER_MODEL, LLGM_GRAPH_MODEL,
-provider credentials, and optionally
-LLGM_WORKSPACE_PATH before running, or supply an explicit --env-file path.
+provider credentials and a search backend before running, or supply --env-file.
+Use LLGM_RETRIEVER_BACKEND=sqlite_fts5 for local BM25. Hybrid search needs the
+configured Modal service and can upload stored sources. LLGM_WORKSPACE_PATH
+optionally selects the saved memory directory. Each rerun adds chat turns.
 LLGM opens and closes its workspace and provider connections.
 """
 

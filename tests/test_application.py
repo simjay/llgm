@@ -26,7 +26,16 @@ from llgm.models import CallableModelClient, ModelResponse, ScriptedModelClient,
 from llgm.models.hosted import OpenAIModelClient
 from llgm.retrieval.base import SearchPassage
 from llgm.retrieval.bm25 import SQLiteBM25Retriever
-from tests.node_support import READ, SEARCH, Models, ReplayFactory
+from tests.node_support import (
+    READ,
+    SEARCH,
+    Models,
+    ReplayFactory,
+    finish,
+    node_context,
+    observation,
+    step,
+)
 from tests.test_models import FakeSDK
 
 
@@ -35,11 +44,6 @@ def conversation(node_id, text):
     return Conversation.from_turns(
         [{"role": "user", "turn_id": "t", "text": text}], node_id=node_id
     )
-
-
-def operation(name, **fields):
-    """Encode one structured runtime operation for contract fixtures."""
-    return json.dumps({"op": name, **fields})
 
 
 def proposer(*, relation=None, usage=Usage(20, 10), invalid=False):
@@ -88,7 +92,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
     def app(self, *, main=None, reader=None, graph=None, policy=None, **kwargs):
         """Construct an application with deterministic clients and generous local accounting limits."""
         models = Models()
-        kwargs.setdefault("repl_factory", ReplayFactory())
+        kwargs.setdefault("interpreter_factory", ReplayFactory())
         return LLGM(
             self.workspace,
             main or models.main,
@@ -516,11 +520,11 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
 
         async def reading_model(request):
             """Pause the seeded delegate so an ordinary ingestion precedes its additional search."""
-            if len(request.messages) == 2:
+            if step(request) == 0:
                 started.set()
                 await release.wait()
-            elif len(request.messages) == 4:
-                observations.append(json.loads(json.loads(request.messages[-1].content)["stdout"]))
+            elif step(request) == 1:
+                observations.append(observation(request))
             return await original(request)
 
         app = self.app(main=models.main, reader=CallableModelClient(reading_model))
@@ -635,7 +639,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         """A blocking index build consumes the application deadline before provider admission."""
         await self.seed(("a", "Orion source"))
         main = ScriptedModelClient(
-            [operation("finish", answer="Unknown", citations=[], unresolved=["No evidence"])]
+            [finish(answer="Unknown", citations=[], unresolved=["No evidence"])]
         )
         app = self.app(main=main)
         evidence = await Evidence.open(self.workspace, passage_chars=app.passage_chars)
@@ -713,7 +717,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             "Orion region", query_date=date, remember=False
         )
         self.assertEqual(result.status, "partial")
-        context = json.loads(models.child_requests[0].messages[1].content)
+        context = node_context(models.child_requests[0])
         self.assertEqual(context["query_date"], date)
         self.assertIsNone(context["journal"]["as_of_ms"])
         self.assertIn(entry.entry_id, context["journal"]["unresolved_entry_ids"])
@@ -847,13 +851,14 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         clients = [FailingOwnedClient(), FailingOwnedClient(), FailingOwnedClient()]
         settings = Settings(
             workspace_path=str(self.path / "factory-inference"),
+            retriever_backend="sqlite_fts5",
             main_model="main",
             graph_model="graph",
             reader_model="small",
         )
         with patch("llgm.models.create_model", side_effect=clients):
             with self.assertRaises(RuntimeError):
-                async with LLGM.from_settings(settings, repl_factory=ReplayFactory()) as app:
+                async with LLGM.from_settings(settings, interpreter_factory=ReplayFactory()) as app:
                     await app.ingest(conversation("a", "Exact persisted source"), organize=False)
                     await app.answer("Exact persisted source", remember=False)
         self.assertTrue(all(client.closed for client in clients))
@@ -931,7 +936,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             client.aclose = close
         with patch("llgm.models.create_model", side_effect=clients):
             async with LLGM.from_settings(
-                settings, evidence_factory=factory, repl_factory=ReplayFactory()
+                settings, evidence_factory=factory, interpreter_factory=ReplayFactory()
             ) as app:
                 await app.ingest(conversation("a", "Orion region is eu-west-1."), organize=False)
                 self.assertEqual(
@@ -948,12 +953,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         """Application preparation indexes each committed source once across repeated questions."""
         await self.seed(("a", "Orion old region"), ("b", "Atlas other region"))
         main = ScriptedModelClient(
-            [
-                operation(
-                    "finish", answer="Unknown", citations=[], unresolved=["No evidence inspected"]
-                )
-            ]
-            * 3
+            [finish(answer="Unknown", citations=[], unresolved=["No evidence inspected"])] * 3
         )
         app = self.app(main=main)
         first = await app.answer("Which region?", remember=False)

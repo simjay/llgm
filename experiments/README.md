@@ -6,13 +6,14 @@ nodes across supplied sessions. It has no completed hosted measurement yet.
 
 | File | Purpose |
 | --- | --- |
-| [Pilot](longmemeval_pilot.json) | Five exposed LongMemEval questions with bounded API allowances |
-| [Smoke](longmemeval_smoke.json) | Ten independently authored integration cases |
+| [DSPy pilot](longmemeval_pilot_dspy.json) | Five exposed LongMemEval questions with bounded API allowances |
+| [DSPy smoke](longmemeval_smoke_dspy.json) | Ten independently authored integration cases |
 | [Smoke cases](longmemeval_smoke_cases.json) | Input histories and evaluator-only labels |
 | [Source pins](source_pins.json) | Dataset and tokenizer identities |
-| [ColBERT integration](colbert.md) | Optional retrieval infrastructure setup and checks |
+| [ColBERT integration](colbert.md) | Fixed-index diagnostics, application hybrid service setup and real retrieval checks |
 | [ColBERT pins](colbert_modal.json) | Remote environment, checkpoint and index settings |
 
-Old benchmark runners and protocols have been removed. Git history retains their
-tracked definitions. Existing ignored data and run artifacts remain untouched.
+The [Docker pilot](longmemeval_pilot.json) and [Docker smoke](longmemeval_smoke.json)
+are retained historical protocols. They require their original checkout for
+execution. The current runner rejects them before hosted model setup. Historical run artifacts retain their original identities.
 Datasets belong under ignored `data/` and generated outputs under ignored `runs/`.

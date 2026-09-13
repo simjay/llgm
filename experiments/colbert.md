@@ -81,6 +81,39 @@ existing `Retriever` interface and can be supplied through an application's
 `evidence_factory` with `Evidence.open(..., retriever=...)`. Application evidence
 search also merges journal results. Use raw retrievers for the B/C comparison.
 
+## Application and viewer search
+
+The same deployment also serves growing application workspaces. This path is
+separate from the fixed benchmark indexes described above:
+
+| Function | Input and work |
+| --- | --- |
+| `prepare_workspace` | Receive a complete source snapshot and build or reopen its hybrid index generation |
+| `search_workspace` | Search that generation using BM25 and ColBERT, then return canonical passage references |
+
+After preparing pinned assets, deploy the current checkout with
+`make colbert-deploy`. Select `LLGM_RETRIEVER_BACKEND=hybrid` in the application
+or viewer. `LLGM_RETRIEVAL_MODAL_APP` defaults to `llgm-colbert`, and
+`LLGM_RETRIEVAL_MODAL_ENVIRONMENT` can select another environment. The caller
+must authenticate to the same Modal workspace.
+
+The first search and each source change can upload the full source history,
+including source metadata, and prepare a new index. Source passages and indexes
+persist under the volume's workspace generations. Unchanged searches reuse a
+generation. Journal and edge changes alone do not rebuild source indexes.
+Failures propagate rather than silently selecting local BM25 or a stale index.
+
+For fewer than 64 passages, the service uses exact ColBERT MaxSim. From 64
+passages onward it uses PLAID. Both components rank the same passages, and their
+ranks are combined with equal weight. This current service behavior does not
+change the historical B/C comparison or establish new retrieval measurements.
+
+`tests/test_workspace_retrieval.py` and `tests/test_live_index_service.py` check
+refresh, reopen and failure contracts with controlled remote or encoder fixtures.
+The small-workspace case in `tests/integration/test_live_colbert.py` exercises
+real exact ColBERT and hybrid refresh when explicitly enabled. A test being
+present does not establish a completed live run.
+
 ## Integration acceptance
 
 The first gate uses a complete checksum-pinned LongMemEval-S history. It runs the

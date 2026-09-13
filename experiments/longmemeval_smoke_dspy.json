@@ -1,0 +1,128 @@
+{
+  "schema_version": 2,
+  "claim": "DSPy RLM Topic-node ten-case synthetic integration smoke",
+  "repetitions": 1,
+  "case_ids": "all",
+  "dataset": {
+    "path": "experiments/longmemeval_smoke_cases.json",
+    "sha256": "4a6eae6fb7fdf2a04f0e88cdf3f0b8cb54f7c5da988f7fea23b71e5e5a45ea78",
+    "case_count": 10
+  },
+  "judge": {
+    "path": "data/evaluators/LongMemEval/src/evaluation/evaluate_qa.py",
+    "sha256": "ecce9c4c79dc89d99534ac17b383a5cbb5b9f0c69ee98adaf0684742e3d95251",
+    "revision": "9e0b455f4ef0e2ab8f2e582289761153549043fc",
+    "method": "Pinned official prompts and Chat Completions settings, strict verdict parser with official substring verdict also recorded; explicit failed-attempt scoring"
+  },
+  "arms": [
+    "llgm",
+    "bm25",
+    "full_context"
+  ],
+  "models": {
+    "main": "gpt-4.1-2025-04-14",
+    "reader": "gpt-4.1-2025-04-14",
+    "judge": "gpt-4o-2024-08-06",
+    "graph": "gpt-4.1-2025-04-14"
+  },
+  "pricing": {
+    "main": {
+      "source": "https://developers.openai.com/api/docs/models/gpt-4.1",
+      "retrieved_date": "2026-09-11",
+      "usd_per_million_input_tokens": 2,
+      "usd_per_million_cached_input_tokens": 0.5,
+      "usd_per_million_output_tokens": 8
+    },
+    "reader": {
+      "source": "https://developers.openai.com/api/docs/models/gpt-4.1",
+      "retrieved_date": "2026-09-11",
+      "usd_per_million_input_tokens": 2,
+      "usd_per_million_cached_input_tokens": 0.5,
+      "usd_per_million_output_tokens": 8
+    },
+    "judge": {
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o",
+      "retrieved_date": "2026-09-11",
+      "usd_per_million_input_tokens": 2.5,
+      "usd_per_million_cached_input_tokens": 1.25,
+      "usd_per_million_output_tokens": 10
+    },
+    "graph": {
+      "source": "https://developers.openai.com/api/docs/models/gpt-4.1",
+      "retrieved_date": "2026-09-11",
+      "usd_per_million_input_tokens": 2,
+      "usd_per_million_cached_input_tokens": 0.5,
+      "usd_per_million_output_tokens": 8
+    }
+  },
+  "budget": {
+    "max_model_calls": 25,
+    "max_reader_calls": 24,
+    "max_searches": 8,
+    "max_evidence_tokens": 96000,
+    "max_context_tokens": 96000,
+    "max_bundle_tokens": 16000,
+    "max_output_tokens": 2048,
+    "timeout_seconds": 240
+  },
+  "runtime": {
+    "max_depth": 3,
+    "max_steps": 10,
+    "max_operations": 128,
+    "max_concurrency": 3,
+    "passage_chars": 2048,
+    "max_seed_nodes": 3,
+    "retrieval_k": 40,
+    "max_journal_bytes": 65536
+  },
+  "maintenance": {
+    "mode": "validated",
+    "max_nodes": 1,
+    "max_candidates": 4,
+    "max_links_per_node": 4,
+    "max_context_chars": 8000,
+    "budget": {
+      "max_model_calls": 1,
+      "max_reader_calls": 1,
+      "max_searches": 1,
+      "max_evidence_tokens": 32000,
+      "max_context_tokens": 48000,
+      "max_output_tokens": 1024,
+      "timeout_seconds": 90,
+      "max_graph_calls": 1
+    }
+  },
+  "reader": {
+    "retrieval_k": 40,
+    "passage_chars": 2048,
+    "max_input_tokens": 250000,
+    "max_output_tokens": 2048
+  },
+  "limits": {
+    "generation_cost_cap_usd": 2,
+    "judge_cost_cap_usd": 0.1,
+    "timeout_seconds_per_call": 90,
+    "run_timeout_seconds": 3600,
+    "concurrent_cases": 2,
+    "judge_timeout_seconds": 600,
+    "tokens_per_minute": 400000,
+    "max_unknown_calls": 100
+  },
+  "policy": {
+    "preparation": "Fresh isolated history per case and arm. LLGM imports supplied sessions through conservative topic routing with immutable per-turn attribution and generic connections. No question or gold during construction. Query uses remember=False. Baselines import original sessions without model organization.",
+    "comparison": "Current topic construction has no hosted measurement. Earlier session-per-node measurements do not establish this behavior. Match models and budgets before architecture claims.",
+    "exposure": "LongMemEval-S contains overlapping histories and previously exposed diagnostic questions. This is a public benchmark result, not an untouched independent holdout.",
+    "target": "Five percentage points over strongest reproduced framework at no higher total cost remains the goal. These initial control arms alone do not compare Mem0 or Graphiti.",
+    "cost": "Generation includes maintenance, query and unknown call liabilities. Judge costs separate. Token-based API estimates are not invoices. Local resources reported but unpriced, so equal total cost is unestablished.",
+    "execution": "All scheduled attempts retained with no answer retries. Existing generation and judge allowances remain admission limits. Full benchmark execution is separate explicit work."
+  },
+  "sandbox": {
+    "startup_timeout_seconds": 30,
+    "execution_timeout_seconds": 180
+  },
+  "rlm": {
+    "implementation": "dspy",
+    "version": "3.3.1",
+    "deno_version": "2.9.6"
+  }
+}

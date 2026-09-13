@@ -9,7 +9,6 @@ class EvidenceBundle:
 
     text: str = ""
     references: tuple = ()
-    hits: list = field(default_factory=list)
     unresolved: list[str] = field(default_factory=list)
     stop_reason: str = "completed"
     usage: dict = field(default_factory=dict)

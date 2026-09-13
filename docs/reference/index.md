@@ -2,7 +2,8 @@
 
 The public API describes arguments, return values and resource ownership.
 The capabilities and limits page helps you decide whether the current behavior
-fits your application, including resource requirements and known gaps.
+fits your application, including source storage, conversation behavior,
+retrieval services and known gaps.
 
 | Reference | Purpose |
 | --- | --- |

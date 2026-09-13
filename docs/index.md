@@ -1,6 +1,6 @@
 # Large Language Graphical Model
 
-**LLGM** gives language models a persistent memory they can investigate.
+**LLGM stands for Large Language Graphical Model.** It gives language models a persistent memory they can investigate.
 Store conversations as they happen, ask a question later, and follow the
 answer's references back to what was actually said.
 
@@ -19,14 +19,14 @@ A final model brings those contributions together.
 - [Quickstart](guide/quickstart.md): install LLGM, store a conversation, ask a
   question, and read the cited source.
 - [Concepts](guide/concepts.md): learn how stored conversations, links, and
-  smaller-model readers work together.
+  model readers work together.
 - [Evidence walkthrough](guide/walkthrough.md): store, search, link, and correct
   evidence in Python without calling a model.
 
 LLGM requires Python 3.11 or later. The first
 [PyPI release](https://pypi.org/project/llgm/) is in progress. The Quickstart
-covers installation from the repository while it is pending, plus the Docker
-and model setup needed for answering.
+covers installation from the repository while it is pending, with configured
+models, DSPy readers and an explicit local-search setting.
 
 ## How an answer comes together
 
@@ -58,9 +58,9 @@ from llgm import LLGM
 
 
 async def main():
-    """Save a note and ask a question about it."""
+    """Save a message and answer a follow-up from the same conversation."""
     async with LLGM.from_settings() as memory:
-        await memory.ingest("Atlas production uses PostgreSQL.")
+        await memory.answer("Atlas production uses PostgreSQL.")
         result = await memory.answer("Which database does Atlas production use?")
         print(result.answer)
 
@@ -68,14 +68,17 @@ async def main():
 asyncio.run(main())
 ```
 
-Saved evidence remains in `./memory` when the program exits. The model selects
-its answer wording. [Quickstart](guide/quickstart.md) shows how to inspect the
+Messages and nonempty replies remain in `./memory` when the program exits.
+Each repeated call adds a new turn. The model selects its answer wording. [Quickstart](guide/quickstart.md) shows how to inspect the
 cited text and read incomplete results.
 
 ## Configure your application
 
-Use [Configuration](guide/configuration.md) to choose model providers, storage,
-search, and limits. Local SQLite storage and BM25 search are the defaults.
+Use [Conversations](guide/conversations.md) for chat IDs, imports and read-only
+questions. Use [Configuration](guide/configuration.md) for providers, storage,
+search and limits. Metadata uses local SQLite. Configured hybrid search combines
+BM25 and ColBERT on Modal, while the quickstart explicitly selects local BM25.
+The [Graph viewer](guide/graph-viewer.md) lets you inspect the saved evidence.
 
 Use the [API reference](reference/api.md) when you need a signature or a precise
 contract. LLGM is an experimental alpha, and its
@@ -89,9 +92,11 @@ expect from models, storage, and resource controls.
 
 Guide overview <guide/index>
 guide/quickstart
+guide/conversations
 guide/concepts
 guide/architecture
 guide/node-search
+guide/graph-viewer
 guide/walkthrough
 guide/configuration
 ```

@@ -51,13 +51,13 @@ Suppose one conversation says that Atlas uses PostgreSQL and follows the
 platform backup policy. Another says that policy keeps backups for seven days.
 You ask: **Which database does Atlas use, and how long are its backups kept?**
 
-1. **Store the conversations.** Each becomes a source node with its original
-   text. Organization can add links between related nodes.
-2. **Find places to start reading.** Search selects relevant nodes for the
-   question.
-3. **Investigate locally.** Reader models inspect passages using Python in
-   isolated Docker containers. They can search again or ask a reader at another
-   node a focused question, such as which backup policy applies.
+1. **Store the conversations.** Related turns append to the same topic node
+   with their original text. Organization can add links between related topics.
+2. **Choose where to start reading.** The current conversation topic comes
+   first. Search can add other relevant nodes.
+3. **Investigate locally.** Each reader uses Python to inspect the evidence at
+   its node. It can search again or ask another reader a focused question,
+   such as which backup policy applies.
 4. **Combine the evidence.** Readers return selected excerpts and findings. A
    final model combines them into an answer with references to the stored text.
 
@@ -75,23 +75,33 @@ through that distinction.
 ## Getting started
 
 LLGM requires Python 3.11 or later. The first
-[PyPI release](https://pypi.org/project/llgm/) is in progress. Once available,
-install the alpha with the OpenAI provider:
+[PyPI release](https://pypi.org/project/llgm/) is in progress. For now, install
+from the repository in a virtual environment:
 
 ```sh
-python -m pip install --pre 'llgm[openai]'
+python -m pip install 'llgm[openai,rlm] @ git+https://github.com/simjay/llgm.git'
 ```
 
-Until that release is available, install from the repository:
+After publication, use `python -m pip install --pre 'llgm[openai,rlm]'`.
+The extras supply the OpenAI client and the DSPy/Deno reader runtime.
+
+Set your API key, model IDs and the local search backend for this example:
 
 ```sh
-python -m pip install 'llgm[openai] @ git+https://github.com/simjay/llgm.git'
+export OPENAI_API_KEY='<your OpenAI API key>'
+export LLGM_MAIN_MODEL='<model ID for writing the answer>'
+export LLGM_READER_MODEL='<model ID for reading evidence>'
+export LLGM_GRAPH_MODEL='<model ID for organizing topics>'
+export LLGM_RETRIEVER_BACKEND=sqlite_fts5
 ```
 
-Start Docker, prepare the `python:3.12-slim` image, and set `OPENAI_API_KEY`,
-`LLGM_MAIN_MODEL`, `LLGM_READER_MODEL`, and `LLGM_GRAPH_MODEL`. The
-[Quickstart](https://llgm.readthedocs.io/en/latest/guide/quickstart.html) gives the
-setup commands. Then save this as `quickstart.py` and run `python quickstart.py`:
+You can use the same model ID for all three roles. The last line selects local
+BM25 search. The configured default combines BM25 and ColBERT on Modal and
+requires a deployed service. The
+[Quickstart](https://llgm.readthedocs.io/en/latest/guide/quickstart.html) explains
+setup and the reader's first runtime download.
+
+Save this as `quickstart.py` and run `python quickstart.py`:
 
 ```python
 import asyncio
@@ -100,7 +110,7 @@ from llgm import LLGM
 
 
 async def main():
-    """Save a note and ask a question about it."""
+    """Save a message and answer a follow-up from the same conversation."""
     async with LLGM.from_settings() as memory:
         await memory.answer("Atlas production uses PostgreSQL.")
         result = await memory.answer("Which database does Atlas production use?")
@@ -110,16 +120,16 @@ async def main():
 asyncio.run(main())
 ```
 
-That is the application flow: open memory, add evidence, ask a question.
-The block closes its connections and keeps the saved evidence in `./memory`.
-Ingestion and answering can make hosted model calls. Pass a chat message list
-to `answer()` for new turns. Use `ingest()` to catch up on earlier conversations. The
-[Quickstart](https://llgm.readthedocs.io/en/latest/guide/quickstart.html) also shows
-how to avoid duplicate ingestion and inspect the answer's sources.
+Both calls save your message and the returned reply. Evidence stays in
+`./memory` after the block closes. Calls can use hosted models, and rerunning
+the script adds new messages. Give each chat a `conversation_id` to resume its
+current topic, use `ingest()` for earlier history, or ask with `remember=False`
+to leave the conversation unchanged.
 
-OpenAI, Anthropic, and compatible endpoints can supply the models. Local SQLite
-and BM25 search work by default, with optional storage and retrieval adapters.
-For storage without model calls or Docker, try the
+OpenAI, Anthropic, and compatible endpoints can supply the models. Metadata
+stays in local SQLite. Search can run locally with BM25 or combine lexical and
+semantic retrieval through the configured hybrid service.
+For storage without model calls or a sandbox, try the
 [evidence update example](https://llgm.readthedocs.io/en/latest/guide/walkthrough.html#follow-an-update-and-a-correction).
 
 LLGM is an experimental alpha. Its evidence trail makes answers inspectable,
@@ -130,10 +140,12 @@ for the current boundaries.
 
 ## Documentation
 
+- [Conversations](https://llgm.readthedocs.io/en/latest/guide/conversations.html): Continue chats, import history, and handle retries.
 - [Concepts](https://llgm.readthedocs.io/en/latest/guide/concepts.html): Learn sources, links, corrections, and recursive reading.
 - [Architecture](https://llgm.readthedocs.io/en/latest/guide/architecture.html): Follow a conversation from ingestion to an answer.
 - [Node search](https://llgm.readthedocs.io/en/latest/guide/node-search.html): Understand how LLGM chooses where to read.
-- [Configuration](https://llgm.readthedocs.io/en/latest/guide/configuration.html): Choose providers, storage, and resource limits.
+- [Graph viewer](https://llgm.readthedocs.io/en/latest/guide/graph-viewer.html): Browse topics, sources, and search results.
+- [Configuration](https://llgm.readthedocs.io/en/latest/guide/configuration.html): Choose providers, storage, search, and resource limits.
 - [API reference](https://llgm.readthedocs.io/en/latest/reference/api.html): Find public interfaces and signatures.
 
 ## Contributing

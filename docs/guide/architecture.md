@@ -1,7 +1,8 @@
 # Architecture
 
-LLGM turns a question into a set of local investigations. Search finds starting
-conversations, model readers inspect their evidence and ask follow-up questions,
+LLGM turns a question into a set of local investigations. The current conversation
+topic is the first reading target, and search can add other starting nodes.
+Model readers inspect their evidence and ask follow-up questions,
 and a final model combines the returned excerpts into an answer. The stored
 history can grow without requiring every answer to place that entire history in
 one prompt.
@@ -9,10 +10,13 @@ one prompt.
 `answer()` is the primary application entry point. It stores new user turns,
 continues or selects a topic, runs local readers, and stores the returned reply.
 `ingest()` catches up on earlier conversation batches without generating a reply.
+The [conversation guide](conversations.md) covers inputs, retries and persistence.
+This page follows how LLGM investigates a question after topic selection.
 
 ## Keep a topic together
 
-A persistent conversation ID identifies the active topic. Topic routing sees a
+Each conversation ID remembers the node for its current topic. The ID belongs
+to the chat, so it stays the same when the topic changes. Topic routing sees a
 bounded preview of recent active turns and retrieved candidate nodes. It prefers
 the active topic, can return to another existing topic, and creates a node only
 for a clear topic change. Length, elapsed time, a session boundary, and a related
@@ -24,9 +28,11 @@ does not rewrite earlier turns or create another graph node. Turn metadata can
 be paged without loading the entire appended conversation. A span read loads its
 own turn. A single enormous turn still requires loading that turn's blob.
 
-The active topic participates in initial reading even when a follow-up lacks
-searchable keywords. Additional seeds and recursive children can investigate
-other nodes. Only selected evidence reaches the final main model context.
+The active topic is always the first default seed, even when a follow-up lacks
+searchable keywords or uses `remember=False`. The pointer belongs to the selected
+`conversation_id`, so another chat's activity does not change it. Additional seeds
+and recursive children can investigate other nodes. Only selected evidence
+reaches the final main model context.
 
 ## Model responsibilities
 
@@ -35,30 +41,23 @@ topic or begin a clearly unrelated topic. It also proposes generic connections
 between nodes. The reader model performs recursive reading and interprets
 what those connections mean for the current question. The main model produces
 the final answer. All three roles have independent model and provider settings.
-Graph names the model role. Graph maintenance names its work, configured through
-`MaintenancePolicy` and reported through `MaintenanceResult`. Reader models
-can run in many recursive child invocations. A child is an invocation, not an
-additional model role.
-
-Both `answer()` and `ingest()` call the same topic routing and append operation.
-`answer()` then reads relevant evidence, answers, and appends the assistant reply.
-`ingest()` only catches up on supplied history. It routes each supplied batch
-as one unit, so it does not split a mixed-topic batch internally.
+`MaintenancePolicy` controls automatic organization, and `MaintenanceResult`
+reports its outcome. Each recursive child uses the reader model with a fresh
+working context.
 
 ## Connect topics
 
 New answer topics and ordinary imports can trigger bounded connection discovery.
-Every new primary connection is untyped, with source
-references explaining where it came from. The writer does not assign support,
-contradiction, dependency or replacement categories. The RLM interprets the
-connection when answering a particular question.
+Connections carry source references explaining where they came from. For
+example, a connection from Database to Registry helps a reader find a deployment
+record. Its relevance to the question is decided during reading.
 
-`MaintenancePolicy` supports `validated`, `propose` and `disabled` modes.
-Validated mode publishes structurally supported connections. Propose mode returns
-them for application review. Disabled mode skips model organization and retains
-the active topic. `organize=False` skips import connection discovery while
-leaving topic routing enabled. Exact journal amendments remain separate explicit
-operations. Connection validation does not establish semantic correctness.
+By default, LLGM checks proposed connections for valid structure and source
+references before publishing them. The application can request proposals for
+review or disable automatic organization through
+[maintenance controls](conversations.md#control-automatic-organization).
+These checks do not establish that a connection is meaningful. Exact journal
+amendments remain separate, explicit operations.
 
 ## Preserve conversation and evidence history
 
@@ -82,7 +81,7 @@ Consider this question:
 ```{mermaid}
 %%{init: {'flowchart': {'rankSpacing': 24, 'nodeSpacing': 24}}}%%
 flowchart TD
-    Question[Question] --> Seeds[Search and select starting nodes]
+    Question[Question] --> Seeds[Current topic first, then search for other seeds]
     Seeds --> Database[Database delegate]
     Seeds --> Backups[Backups delegate]
     Database --> Child[Registry child delegate]
@@ -98,10 +97,15 @@ decides that child will help.
 
 ### 1. Choose the starting nodes
 
-The library searches passages, then selects their distinct owning nodes in
-ranking order. These starting nodes are called seeds. With a limit of two,
-a ranking of Database, Database, Backups and Registry selects Database and
-Backups.
+The library selects the current topic first, then fills remaining slots from
+distinct owners of ranked passages. These starting nodes are called seeds.
+If Database is current, a two-node limit selects Database and the highest-ranked
+other owner, even if Database has no matching passage. Its reader receives recent
+turn references directly from the session pointer.
+
+A one-node limit skips initial retrieval when the current topic is known.
+Reading that topic can also proceed when routing has spent the search allowance.
+A read-only question without a current topic uses passage retrieval alone.
 
 `retrieval_k` limits the passage pool and `max_seed_nodes` limits the number
 of starting nodes. Passing `answer(..., remember=False, node_id=...)` bypasses this search and
@@ -126,7 +130,10 @@ placing every intermediate value in the model's context. Database's delegate
 can inspect the production decision while Backups' delegate reads the retention
 period.
 
-LLGM runs this generated Python in isolated Docker interpreters. Evidence access
+Each delegate is a [DSPy RLM](https://dspy.ai/api/modules/RLM/) with its own
+Deno/Pyodide interpreter. DSPy handles Python actions, observations, persistent
+variables and `SUBMIT` results. LLGM validates each submitted citation against
+evidence accessed by that invocation. Evidence access
 and model requests remain in the host runtime. When you use a hosted provider,
 the evidence presented to a model is sent to that provider. The
 [quickstart](quickstart.md) covers setup.
@@ -140,7 +147,11 @@ text keeps its original references.
 
 Inside a delegate's interpreter, `edges()` lists applicable outgoing
 relationships and `search()` finds additional references. The delegate can read
-a reference directly or call `query_node(node_id, question)` to start a child.
+a reference directly or call `query_node(node_id, question)` to start a child. The
+child is another DSPy RLM with a fresh context. DSPy also supplies `llm_query`
+and `llm_query_batched` for ordinary model calls on selected text. These calls
+use the same reader model and shared budget. They do not start recursive node
+readers.
 
 Database might find the database choice but need Registry to establish the
 hosting region. It can ask that node, "Where is production hosted?" The child
@@ -194,8 +205,9 @@ reading its policy. Successful findings remain available, and unrecovered
 failures remain visible. Another branch can resolve a delegate's missing-fact
 note, but the main model cannot silently remove a required failure report.
 
-In read-only mode, an empty search produces a partial result without starting delegates. Nodes
-skipped by the initial seed limit also make the result partial. The
+In read-only mode without a current topic, an empty search produces a partial
+result without starting delegates. Nodes skipped by the initial seed limit also
+make the result partial. The
 [quickstart](quickstart.md#understand-the-result) shows result handling, including
 budget exhaustion and explicit abstention.
 
@@ -245,7 +257,7 @@ useful when you want to configure the pipeline or provide a component yourself:
 
 | Object | Responsibility |
 | --- | --- |
-| `LLGM` | Coordinates ingestion, optional organization and answering. |
+| `LLGM` | Saves conversations, routes topics, organizes links and coordinates answers. |
 | `Workspace` | Stores original conversations, directed edges and journals. |
 | `Settings` | Selects storage, model providers and runtime limits. |
 | `Budget` | Limits the work performed for one answer. |
@@ -263,9 +275,10 @@ them. See [resource ownership](configuration.md#own-directly-constructed-clients
 | `Retriever.search()` | Passage ranking for the stored evidence. |
 | `BlobStore.put()` and `BlobStore.get()` | Storage of immutable source bytes. |
 
-The default retriever uses a reusable SQLite FTS5 index. It refreshes newly
-published evidence. Its first build reads existing sources, and corpus growth
-still increases storage and indexing work.
+Configured applications use hybrid BM25 and ColBERT search through Modal.
+Source appends prepare a new source generation on the next search. Inline
+journals retain local SQLite retrieval. See [node search](node-search.md) for
+indexing costs, exact scoring for small corpora, and the explicit offline option.
 
 A custom retriever enters through an async `evidence_factory`. Its references
 must resolve to evidence in the workspace. LLGM uses the stored text when
@@ -273,8 +286,8 @@ reading those references and keeps local journal retrieval available. Your
 application owns the injected retriever and keeps its index up to date. See
 [custom search](configuration.md#use-your-own-search-backend).
 
-`LLGM` uses `NodeRuntime` for the pipeline described here. The
-[advanced API](../reference/api.md#specialized-execution-interfaces) also exposes
-lower-level execution interfaces for applications that supply their own context
-or retrieval policy. They have separate contracts and are not settings that
-change the default answer pipeline.
+`LLGM` uses `NodeRuntime` for the pipeline described here. Applications that
+already own evidence access and seed selection can call
+[`NodeRuntime.answer()`](../reference/api.md#effective-reads-and-node-execution)
+directly with `NodeSeed` records. Both entry points use the same DSPy reader
+loop, shared budgets and citation validation.

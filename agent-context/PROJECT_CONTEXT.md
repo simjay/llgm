@@ -13,22 +13,31 @@ requirements and supported behavior.
 ## Product model
 
 A topic node contains append-only conversation turns. Related sessions can
-share a topic, and new turns preserve earlier span identities. Passages provide stable spans
-into its turns. Generic primary edges connect related nodes. Readers interpret their meaning. Per-node journals record
-explicit amendments while retaining the original evidence and append history.
+share a topic, and new turns preserve earlier span identities. Search passages
+point into those turns. Generic primary edges connect related nodes, and readers
+interpret their meaning. Per-node journals record explicit amendments while
+retaining original evidence and append history.
 Edges and journals have separate responsibilities.
 
-By default, an answer starts by searching passages and selecting their distinct
-node owners. Reader-model delegates inspect the admitted nodes and can query
-related nodes recursively. Their selected findings and evidence go to one final main-model
-call. The persistent graph represents evidence relationships. It does not define
+By default, an answer starts at its conversation's current topic, including in
+read-only mode. Search can fill remaining seed slots with distinct node owners.
+The current pointer is per conversation and survives restarts. Explicit read-only
+node selection overrides it, and a read-only question without a pointer uses
+retrieval alone. Reader-model delegates inspect the admitted nodes and can query
+related nodes recursively. Their selected findings and evidence go to one final
+main-model call. The persistent graph represents evidence relationships. It does not define
 probabilistic factors or guarantee convergence.
 
-Read [concepts](../docs/guide/concepts.md) for terminology and
+Read [conversations](../docs/guide/conversations.md) for application inputs,
+[concepts](../docs/guide/concepts.md) for terminology, and
 [architecture](../docs/guide/architecture.md) for the complete answer lifecycle.
 The [agent code map](ARCHITECTURE.md) points to the implementation.
 
 ## Current boundaries
+
+- `llgm view` and `llgm.viewer.GraphViewer` provide local graph inspection.
+  The viewer shows the selected conversation's current topic, pages original
+  turns and journal records, and reuses evidence search. It does not edit memory.
 
 - `LLGM` is the product entry point. `from_settings()` constructs and owns its
   configured resources, reading environment settings at context entry when no
@@ -45,13 +54,18 @@ The [agent code map](ARCHITECTURE.md) points to the implementation.
   still load whole base sources. Schema 3 requires an explicit copy.
 - Primary connections have no relationship type field. Journals retain
   explicit amendment semantics. Model topic and connection quality is unmeasured.
-- Local SQLite metadata and BM25 search are the default. S3 can hold source
-  blobs. This does not make the metadata database distributed.
-- Official ColBERTv2 with PLAID and other retrievers use optional adapters.
-  BM25 plus ColBERT composition requires a caller-supplied retriever.
+- SQLite remains the default metadata store. Configured application and CLI
+  viewer search defaults to BM25 plus ColBERT on Modal. Source generations refresh
+  lazily, with exact ColBERT below 64 passages and PLAID from 64 onward.
+  Explicit `sqlite_fts5` retains local BM25. Quickstart deliberately selects it
+  for a first program. See [node search](../docs/guide/node-search.md) for costs
+  and the remaining full-snapshot reindexing limitation.
 - Model generation can use native OpenAI, Anthropic, or configured compatible
-  endpoints. SDKs stay in adapters. Full node inference uses Docker for generated
-  Python while model calls and evidence access run on the host.
+  endpoints. SDKs stay in adapters. Node readers use DSPy RLM and the default Deno/Pyodide sandbox. Model
+  calls and evidence access run on the host through LLGM admission. The main
+  remains one ordinary synthesis call. The optional rlm extra installs DSPy
+  and Deno. NodeRuntime is the sole answer controller, also available for direct
+  seed-based queries. The alternative query runtimes have been removed.
 - Model roles are Main, Reader, and Graph. Constructors and settings use
   main_model, reader_model, and graph_model. Reader and graph call budgets and
   trace roles stay separate. Graph maintenance remains the process name.
@@ -74,10 +88,11 @@ in [decisions](DECISIONS.md), and unfinished work in
 Use small replaceable interfaces, docstrings on every Python definition, and
 comments that explain a constraint or non-obvious choice. Avoid duplicate public
 entry points and abstractions without a demonstrated contract or ownership boundary. Follow
-[code standards](../development/standards.md) and select meaningful checks through
+[code standards](../docs/contributing/standards.md) and select meaningful checks through
 [testing](TESTING.md).
 
-The user site is exclusively for library users. Contributor operations belong in
-`development/`, benchmark runbooks in `experiments/`, and shared coding-agent
+The user site publishes the guides and API reference for library users.
+Contributor operations belong in `docs/contributing/`, benchmark runbooks in
+`experiments/`, and shared coding-agent
 knowledge here. Private research and machine state are not required inputs to
 the library, its tests, or its documentation build.

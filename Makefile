@@ -6,9 +6,13 @@ PORT ?= 8000
 DOCS_BUILD_DIR ?= docs/_build/html
 BENCHMARK_OUTPUT ?=
 ENV_FILE ?=
+WORKSPACE ?=
+CONVERSATION_ID ?= default
+VIEWER_PORT ?= 8765
 
 .PHONY: help setup check test format lint docstrings coverage
 .PHONY: docs docs-links serve-docs build clean test-data
+.PHONY: viewer
 .PHONY: benchmark-prepare benchmark-longmemeval
 .PHONY: setup-colbert colbert-prepare test-colbert colbert-deploy colbert-shell
 
@@ -17,6 +21,7 @@ help:
 	  'LLGM commands (run from the repository root)' \
 	  '' \
 	  'Everyday development' \
+	  '  make viewer      Open the saved graph in your browser' \
 	  '  make setup       Create .venv and install editable core, test and docs dependencies' \
 	  '  make check       Run lint, docstrings and deterministic tests' \
 	  '  make test        Run deterministic tests without integration tests' \
@@ -37,7 +42,7 @@ help:
 	  '' \
 	  'Current LongMemEval pilot (explicit opt-in)' \
 	  '  make benchmark-prepare     Validate current pilot inputs without model calls' \
-	  '  make benchmark-longmemeval Run pilot generation and judging (paid API calls and Docker)' \
+	  '  make benchmark-longmemeval Run pilot generation and judging (paid API calls and DSPy)' \
 	  '    Set BENCHMARK_OUTPUT=NEW_DIRECTORY. Execution accepts ENV_FILE=.env.' \
 	  '' \
 	  'ColBERT development (remote commands can incur Modal charges)' \
@@ -52,6 +57,10 @@ help:
 	  'Overrides: PYTHON=python3 UV=uv PORT=8000 DOCS_BUILD_DIR=docs/_build/html'
 
 # Everyday development
+
+viewer: ENV_FILE = $(wildcard .env)
+viewer:
+	"$(PYTHON)" -m llgm.cli view $(if $(strip $(WORKSPACE)),--workspace "$(WORKSPACE)",) --conversation-id "$(CONVERSATION_ID)" --port "$(VIEWER_PORT)" $(if $(strip $(ENV_FILE)),--env-file "$(ENV_FILE)",)
 
 setup:
 	@if [ "$(PYTHON)" = '.venv/bin/python' ] && [ ! -e .venv ]; then \
@@ -111,11 +120,11 @@ test-data:
 
 benchmark-prepare:
 	$(if $(strip $(BENCHMARK_OUTPUT)),,$(error BENCHMARK_OUTPUT is required. Choose a new directory))
-	"$(PYTHON)" -m llgm.evaluation.memory_benchmark --protocol experiments/longmemeval_pilot.json --output "$(BENCHMARK_OUTPUT)"
+	"$(PYTHON)" -m llgm.evaluation.memory_benchmark --protocol experiments/longmemeval_pilot_dspy.json --output "$(BENCHMARK_OUTPUT)"
 
 benchmark-longmemeval:
 	$(if $(strip $(BENCHMARK_OUTPUT)),,$(error BENCHMARK_OUTPUT is required. Choose a new directory))
-	"$(PYTHON)" -m llgm.evaluation.memory_benchmark --protocol experiments/longmemeval_pilot.json --output "$(BENCHMARK_OUTPUT)" $(if $(strip $(ENV_FILE)),--env-file "$(ENV_FILE)",) --execute
+	"$(PYTHON)" -m llgm.evaluation.memory_benchmark --protocol experiments/longmemeval_pilot_dspy.json --output "$(BENCHMARK_OUTPUT)" $(if $(strip $(ENV_FILE)),--env-file "$(ENV_FILE)",) --execute
 
 # Remote ColBERT development
 

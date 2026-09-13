@@ -1,34 +1,54 @@
 # Node search
 
-When you ask, "Which database does production use?", LLGM first needs useful
-places to read. It searches passages and selects the conversations that own
-them. Those starting conversations are called **seed nodes**.
+When you ask, "What about its backups?", LLGM starts at the current topic for
+your `conversation_id`. You do not need to repeat the topic's searchable words.
+Search can add other relevant conversations. These starting conversations are
+called **seed nodes**.
 
 This page explains that selection rule, the settings that affect it, and how
 to tell whether search missed needed evidence. The later model calls are
 covered in [architecture](architecture.md#how-an-answer-runs).
 
+## Start at the current topic
+
+Each conversation has a persistent pointer to its current topic. That node is
+always the first default seed, including when `remember=False`. The pointer
+survives application restarts and is separate from other conversations' activity.
+The current reader receives recent turn references even when search finds no
+matching passages.
+
+Search fills remaining seed slots. With `max_seed_nodes=1`, the current topic is
+the sole seed and initial retrieval is skipped. If topic routing has already
+spent the answer's search allowance, reading still starts at the known current
+node. Readers may search or follow connections within the remaining budget.
+
+When a read-only question has no current topic, initial retrieval supplies the
+seeds. An explicit `node_id` overrides the session pointer and becomes the sole
+seed. A read-only question never moves that pointer or appends conversation turns.
+
 ## Follow a passage ranking
 
-The default retriever uses BM25 in a local SQLite FTS5 index. BM25 ranks text
-using word matches. The index includes source passages and inline journal
-notes, and refreshes as workspace records are published. This default search
-and seed selection make no model calls.
+Configured applications default to hybrid source search: BM25 word matching
+and ColBERTv2 semantic matching over the same passages, fused by rank. The
+authenticated Modal worker indexes source snapshots and runs both components.
+Inline journal notes stay in a local SQLite FTS5 index. Search makes no Main,
+Reader, or Graph calls, but semantic encoding and indexing use remote compute.
 
-Read-only answers follow four steps:
+When initial retrieval runs, selection follows four steps:
 
 1. Retrieve up to `retrieval_k` passages for the original question.
-2. Walk that ranking and select the first `max_seed_nodes` distinct owners.
+2. Reserve the first slot for the current topic when it exists. Walk the ranking
+   and fill the remaining slots with distinct owners, up to `max_seed_nodes` total.
 3. Give each selected node all of its distinct matching references from the
    returned pool. Remove exact duplicates, but keep overlapping spans separate.
 4. Record other owners in the pool as skipped because of the seed limit.
 
-For example, suppose the question asks about the database and its backups,
-and the ranking is:
+For example, suppose Database is the current topic, the question asks about
+its backups, and the ranking is:
 
 | Passage rank | Owning conversation | Selection with a three-node limit |
 | --- | --- | --- |
-| 1 | Database | Select Database |
+| 1 | Database | Add a reference to the current Database seed |
 | 2 | Database | Add a reference to Database |
 | 3 | Backups | Select Backups |
 | 4 | Database | Add another reference to Database |
@@ -62,15 +82,16 @@ raising the model-call, context or time allowances.
 
 Two other controls affect search:
 
-- `passage_chars` sets the default local passage size, in characters. It defaults
-  to 2,048 and is a Python runtime option, not an environment setting.
+- `passage_chars` sets the local journal and offline BM25 passage size. It defaults
+  to 2,048 characters. Hybrid sources use 180-token windows with 32-token overlap,
+  measured using the pinned ColBERT tokenizer, including metadata and special tokens.
 - `max_searches` limits search calls across the whole answer. Its default of
   eight includes the initial retrieval. Set it through the answer budget or
   `LLGM_MAX_SEARCHES`.
 
-Conversation answers reserve a seed slot for the active topic and supply recent
-turn references along with matching passages. Remaining slots follow the same
-ranking rule. No score threshold is implemented.
+Both conversation and read-only answers reserve the first seed slot for their
+current topic and supply recent turn references along with matching passages.
+Remaining slots follow the same ranking rule. No score threshold is implemented.
 
 If you already know which node to investigate, pass `node_id` and
 `remember=False` to `answer()`.
@@ -85,17 +106,26 @@ selection rule and delegate workflow.
 BM25 works from word matches. ColBERT compares learned vectors for query tokens
 and passage tokens, allowing matches beyond identical words. PLAID is the
 search engine used to find promising passages efficiently in a ColBERT index.
-LLGM's official adapter uses the released ColBERTv2 model with PLAID.
+LLGM uses equal-weight reciprocal-rank fusion. Each source component retrieves
+up to 40 passages. A passage contributes `1 / (60 + rank)` from each component
+that finds it. LLGM sums those contributions and returns up to `retrieval_k` hits.
+The score is a ranking value, not a calibrated similarity or probability.
+
+Workspace corpora with fewer than 64 passages use exact ColBERT MaxSim scoring.
+This keeps semantic retrieval available before there is enough text to train
+PLAID's clusters. Larger corpora use the official PLAID index. The descriptor
+reports which engine ran. Passages are search windows inside topic nodes and
+do not create additional graph nodes.
 
 | Option | How it connects to LLGM |
 | --- | --- |
-| Local BM25 | Default workspace index, refreshed from new publications |
+| Hybrid, the configured default | `LLGM_RETRIEVER_BACKEND=hybrid`, with BM25 and ColBERT on Modal |
+| Local BM25 | `LLGM_RETRIEVER_BACKEND=sqlite_fts5`, refreshed from new publications |
 | Official ColBERTv2 and PLAID | Optional local adapter or authenticated Modal transport over an explicitly prepared index |
 | Lexical and dense hybrid | `HybridRetriever` combines passage rankings over matching corpora |
-| BM25 and ColBERT together | Requires a caller-supplied composite retriever. There is no built-in application setting for this combination |
 
-Supply a custom retriever through `evidence_factory`. A backend name alone
-does not build or deploy an index. Your application maintains the index and
+Supply other custom retrievers through `evidence_factory`. A custom backend name
+does not build or deploy an index. Your application maintains that index and
 provides references that resolve in the workspace. LLGM reads their text from
 the stored evidence. See
 [custom retrieval](configuration.md#use-your-own-search-backend).
@@ -107,8 +137,23 @@ passages.
 
 A ColBERT worker may need to load its model and index before serving its first
 search. This startup delay is a **cold start**. Later searches can reuse the
-loaded state. Connecting the Modal adapter does not upload the workspace or
-build a remote index.
+loaded state. The configured hybrid backend uploads source records on the first
+search and after source appends, then builds or reopens a content-addressed
+generation. Unchanged searches send only its ID and the query. A changed corpus
+currently requires a complete snapshot upload and a new semantic index. This
+can be expensive for large topics. Index compaction and incremental PLAID updates
+are not implemented. Journals and graph-only edits do not rebuild the source index.
+
+Search waits for preparation and fails explicitly if the worker is unavailable.
+It never substitutes BM25 or an older generation. Indexing time is part of the
+answer deadline. Use explicit local BM25 when remote search is not configured.
+The lower-level `ModalColBERTRetriever.connect()` still opens an existing fixed
+index without uploading sources. See [search setup](configuration.md#search-backend).
+
+Local and remote ColBERT adapters bind the index to a canonical passage corpus.
+They reject unknown or duplicate passage IDs, invalid ranks and nonfinite scores.
+Returned text and references come from that corpus. Editing result metadata does
+not change later searches or the index identity.
 
 For the underlying methods, see the [ColBERTv2 paper](https://aclanthology.org/2022.naacl-main.272/)
 and [PLAID paper](https://arxiv.org/abs/2205.09707).
@@ -153,8 +198,15 @@ happened after selection.
 
 A node skipped because of the seed limit makes the current pipeline's result
 `partial`, even if a later read reaches it or the answer text appears complete.
-Empty retrieval also produces a partial result. Read
+When there is no current topic or explicit seed, empty retrieval also produces
+a partial result. Read
 `result.evidence.unresolved`, the answer and its references together. Valid
 references identify source text but do not prove that it supports the model's
 claim. See [capabilities and limits](../reference/implementation-status.md)
 for the other result constraints.
+
+## Inspect search visually
+
+The [graph viewer](graph-viewer.md) lets you search the same evidence backend,
+see matching topic nodes, and open their stored turns and journals. It keeps
+the selected conversation's current node highlighted without moving its pointer.

@@ -3,7 +3,7 @@
 Start by storing two conversations, finding a passage and following a link.
 Then apply an exact correction without changing the original text. Both examples
 need only the installed core package. The final section shows how delegates use
-these operations while answering through Docker interpreters.
+these operations while answering through DSPy sandboxes.
 
 The examples use a team's production database and backup policy.
 [Concepts](concepts.md) introduces the terms used here.
@@ -19,7 +19,7 @@ python -m pip install 'llgm @ git+https://github.com/simjay/llgm.git'
 
 Save the complete example below as `evidence.py` and run `python evidence.py`.
 It creates a temporary workspace with two sources, adds an explicit relationship,
-then searches and reads the stored evidence. It needs no credentials or Docker.
+then searches and reads the stored evidence. It needs no credentials or sandbox runtime.
 
 ```python
 import asyncio
@@ -49,7 +49,7 @@ async def main():
                 for reference in hits[0].passage.refs:
                     record = await evidence.read(reference)
                     print("found:", record.text)
-                targets = await evidence.neighbors(database.node_id, "backup_policy")
+                targets = await evidence.neighbors(database.node_id)
                 print("linked conversations:", len(targets))
 
 
@@ -87,7 +87,7 @@ the original conversation and leaving the staging statement unchanged.
 
 Save the following **standalone application script** as `correction.py` and run
 it with `python correction.py`. It needs only the installed core package. It
-creates a temporary workspace and makes no model calls or Docker requests.
+creates a temporary workspace and makes no model calls or sandbox requests.
 
 ```python
 import asyncio
@@ -196,15 +196,15 @@ for the record types and methods.
 ## Follow one answer
 
 Download {download}`offline.py <../../examples/offline.py>` and save it as
-`offline.py`. It uses real SQLite storage and Docker interpreters with scripted
+`offline.py`. It uses real SQLite storage and DSPy sandboxes with scripted
 model responses, so the same reads and returns happen each time. It makes no
 hosted calls and needs no model credentials.
 
-Use the core installation above. With Docker running, download the interpreter
-image and run the saved script:
+Install the sandbox extra and run the saved script. The first run can download
+Deno/Pyodide runtime assets:
 
 ```sh
-docker pull python:3.12-slim
+python -m pip install 'llgm[rlm] @ git+https://github.com/simjay/llgm.git'
 python offline.py
 ```
 
@@ -221,7 +221,8 @@ are explanatory labels. Actual node IDs are generated identities.
 The script asks for the production database, backup retention and region.
 Follow these steps through its answer:
 
-1. Search selects Database and Backups. Each gets a delegate.
+1. This read-only example has no current conversation pointer, so search selects
+   Database and Backups. Each gets a delegate.
 2. Database's delegate reads its source with the journal amendment applied.
    Production now says MySQL, while staging still says SQLite. The replacement
    text points back to Update.
@@ -286,6 +287,7 @@ does not display it. `read()` takes one reference, so a delegate uses a loop to
 read several passages. It can request later metadata pages with
 `source_info(offset=...)`, using the preceding response's `next_offset`.
 
-This controls the text sent to the model. Resolving a span still loads its
-owning source into application memory, and the complete operational journal
-must fit its byte limit.
+This controls the text sent to the model. Reading an appended turn still loads
+that turn's blob into application memory. Explicit imports and legacy base
+sources load their complete source blob. The complete operational journal must
+also fit its byte limit.

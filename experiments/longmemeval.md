@@ -1,9 +1,9 @@
 # LongMemEval
 
 The current evaluation asks whether LLGM can answer questions about earlier
-conversations. The [pilot](longmemeval_pilot.json) selects five exposed questions.
+conversations. The [DSPy pilot](longmemeval_pilot_dspy.json) selects five exposed questions.
 It is a development diagnostic, not an independent accuracy estimate. The
-[smoke protocol](longmemeval_smoke.json) uses ten independently authored cases
+[DSPy smoke protocol](longmemeval_smoke_dspy.json) uses ten independently authored cases
 for integration checks. Neither protocol has a completed measurement under the
 current topic construction policy.
 
@@ -55,8 +55,11 @@ Neither the question nor gold is available during construction.
 Generic connections can be proposed after imports. Journals receive no automatic
 amendments. Construction failures and all provider attempts remain recorded.
 After construction, `answer(..., remember=False)` evaluates the question without
-adding it to the evidence corpus. Initial retrieval and recursive readers use
-the normal application pipeline. Final scoring uses the pinned official task
+adding it to the evidence corpus. The runner constructs `LLGM` directly with
+local BM25, so the configured application's Modal hybrid default does not change
+these runs. Imports use the `benchmark-history` conversation ID. The read-only
+question uses the default ID without a current pointer, so initial seeds come
+from retrieval. Recursive readers use the ordinary node runtime. Final scoring uses the pinned official task
 prompts and a separate judge.
 
 The BM25 and full-context controls import the same sessions without routing or
@@ -68,7 +71,8 @@ arms. No framework superiority or equal total cost is established.
 
 Install benchmark dependencies and obtain the exact dataset and evaluator files
 named in the protocol. The runner verifies hashes and does not download them.
-Docker must be running with the pinned image already present. Credentials belong
+The benchmark extra installs the pinned DSPy and Deno packages. The first
+sandbox startup can download runtime assets. Credentials belong
 in environment variables or an explicitly supplied local environment file.
 
 ```sh
@@ -78,16 +82,16 @@ make benchmark-longmemeval BENCHMARK_OUTPUT=runs/longmemeval-topic-pilot ENV_FIL
 ```
 
 The second command prepares without model calls. The third dispatches paid
-model calls and Docker execution. The pilot retains a $5 generation allowance
+model calls and DSPy sandbox execution. The pilot retains a $5 generation allowance
 and $0.10 judge allowance. Topic construction changes work and cost, so those
-allowances can stop an incomplete run. No full 500-question run is authorized
-by these defaults.
+allowances can stop an incomplete run. The protocol schedules only its five selected questions. Expanding to the full
+500-question dataset requires a separately frozen run configuration.
 
 For the synthetic smoke check:
 
 ```sh
 .venv/bin/python -m llgm.evaluation.memory_benchmark \
-  --protocol experiments/longmemeval_smoke.json \
+  --protocol experiments/longmemeval_smoke_dspy.json \
   --output runs/longmemeval-topic-smoke --env-file .env --execute
 ```
 
@@ -116,3 +120,12 @@ have different responsibilities.
 The five pilot questions have been inspected during development. Their results
 cannot be presented as an independent holdout. Earlier measurements used a
 different construction policy and do not establish current behavior.
+
+## Runtime protocol identity
+
+The DSPy variants freeze a new controller and sandbox identity. The original
+[Docker pilot](longmemeval_pilot.json) and [Docker smoke](longmemeval_smoke.json)
+remain unchanged as historical protocols. The current execution preflight
+rejects them before model setup. Reproduce those runs from their original
+checkout. Reports over saved artifacts still use the identities saved with each
+run. No hosted measurement has been completed for the DSPy variants.

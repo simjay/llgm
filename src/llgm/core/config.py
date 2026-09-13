@@ -12,8 +12,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from llgm.core.errors import ConfigurationError
 
-# Integration fixtures and REPL launchers own these environment namespaces.
-_EXTERNAL_ENV_PREFIXES = ("LLGM_TEST_", "LLGM_REPL_")
+# Integration fixtures own this environment namespace.
+_EXTERNAL_ENV_PREFIXES = ("LLGM_TEST_",)
 
 
 def redact_url(value: str) -> str:
@@ -32,7 +32,9 @@ class Settings:
     blob_uri: str = ""
     metadata_backend: str = "sqlite"
     database_url: str = field(default="", repr=False)
-    retriever_backend: str = "sqlite_fts5"
+    retriever_backend: str = "hybrid"
+    retrieval_modal_app: str = "llgm-colbert"
+    retrieval_modal_environment: str = ""
     main_provider: str = "openai"
     main_model: str | None = None
     main_base_url: str | None = field(default=None, repr=False)
@@ -49,7 +51,6 @@ class Settings:
     retrieval_k: int = 12
     max_concurrency: int = 3
     max_journal_bytes: int = 65536
-    node_repl_image: str = "python:3.12-slim"
     max_model_calls: int = 40
     max_reader_calls: int = 36
     max_graph_calls: int = 8
@@ -93,12 +94,6 @@ class Settings:
         if self.retrieval_k > 40 or self.max_seed_nodes > self.retrieval_k:
             raise ConfigurationError("Require max_seed_nodes <= retrieval_k <= 40")
         if (
-            not self.node_repl_image
-            or self.node_repl_image.startswith("-")
-            or any(character.isspace() or ord(character) < 32 for character in self.node_repl_image)
-        ):
-            raise ConfigurationError("node_repl_image must be a nonempty Docker image reference")
-        if (
             isinstance(self.timeout_seconds, bool)
             or not isinstance(self.timeout_seconds, (int, float))
             or not (0 < self.timeout_seconds < float("inf"))
@@ -123,8 +118,13 @@ class Settings:
             ]
         ):
             raise ConfigurationError("database_url scheme does not match metadata_backend")
-        if self.metadata_backend == "postgres" and self.retriever_backend == "sqlite_fts5":
+        if self.metadata_backend == "postgres" and self.retriever_backend in {
+            "sqlite_fts5",
+            "hybrid",
+        }:
             raise ConfigurationError("postgres requires an explicitly compatible retriever_backend")
+        if not self.retrieval_modal_app.strip():
+            raise ConfigurationError("retrieval_modal_app must be nonempty text")
         for name in ("main_provider", "reader_provider", "graph_provider"):
             if getattr(self, name) not in {"openai", "anthropic", "openai_compatible"}:
                 raise ConfigurationError(f"Unsupported {name}; inject a custom client in Python")
@@ -147,8 +147,8 @@ class Settings:
     ) -> Settings:
         """Apply defaults, application environment, TOML, then explicit overrides.
 
-        ``LLGM_TEST_`` and ``LLGM_REPL_`` environment values belong to their
-        integration fixtures and REPL launchers, so they are neither parsed
+        ``LLGM_TEST_`` environment values belong to integration fixtures,
+        so they are neither parsed
         nor included in settings diagnostics. Other unknown ``LLGM_`` keys
         remain errors. TOML and explicit overrides accept only settings fields.
         """

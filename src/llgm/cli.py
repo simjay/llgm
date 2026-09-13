@@ -17,9 +17,7 @@ def _parser():
         prog="llgm", description="Persistent evidence and bounded LLM inference"
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    ask = commands.add_parser(
-        "ask", help="Answer with configured models and local Docker node delegates"
-    )
+    ask = commands.add_parser("ask", help="Answer with configured models and DSPy node readers")
     ask.add_argument("question")
     ask.add_argument("--config", type=Path)
     ask.add_argument(
@@ -38,6 +36,15 @@ def _parser():
     ask.add_argument("--scope", default="{}", help="JSON object selecting evidence applicability")
     ask.add_argument("--as-of-ms", type=int, help="Journal validity instant in Unix milliseconds")
     ask.add_argument("--query-date", help="Original date text for model context")
+    view = commands.add_parser("view", help="Browse a local graph and search its evidence")
+    view.add_argument("--workspace", type=Path)
+    view.add_argument("--config", type=Path)
+    view.add_argument("--env-file", type=Path)
+    view.add_argument("--conversation-id", default="default")
+    view.add_argument(
+        "--port", type=int, default=8765, help="Local port, or 0 to choose an available port"
+    )
+    view.add_argument("--no-browser", action="store_true", help="Print the URL without opening it")
     migrate = commands.add_parser(
         "migrate", help="Copy a schema-3 workspace, or schema 2 with --journal-roles"
     )
@@ -49,6 +56,40 @@ def _parser():
         help="JSON mapping of journal entry IDs to edge, amendment, or unresolved",
     )
     return parser
+
+
+async def _view(args) -> None:
+    """Browse an existing configured workspace without allocating answer model clients."""
+    import webbrowser
+
+    from llgm import Settings, Workspace, load_env_file
+    from llgm.retrieval.workspace import configured_evidence_factory
+    from llgm.viewer import GraphViewer
+
+    if args.env_file is not None:
+        load_env_file(args.env_file)
+    settings = Settings.load(
+        config_file=args.config,
+        overrides={"workspace_path": str(args.workspace)} if args.workspace else {},
+    )
+    if settings.retriever_backend not in {"hybrid", "sqlite_fts5"}:
+        raise LLGMError("Custom retrieval requires GraphViewer.from_application() in Python")
+    workspace = Workspace.open(args.workspace, settings=settings)
+    if workspace.database_path == ":memory:" or not Path(workspace.database_path).is_file():
+        raise LLGMError("Workspace does not exist. Save a conversation before opening the viewer")
+    async with workspace:
+        async with GraphViewer(
+            workspace,
+            evidence_factory=configured_evidence_factory(workspace, settings),
+            retrieval_k=settings.retrieval_k,
+            conversation_id=args.conversation_id,
+            port=args.port,
+        ) as viewer:
+            print(f"LLGM graph viewer: {viewer.url}", flush=True)
+            print("Press Ctrl-C to stop.", flush=True)
+            if not args.no_browser:
+                await asyncio.to_thread(webbrowser.open, viewer.url)
+            await viewer.serve_forever()
 
 
 async def _ask(args) -> tuple[dict, int]:
@@ -86,11 +127,14 @@ async def _ask(args) -> tuple[dict, int]:
 
 
 def main(argv=None) -> int:
-    """Print one JSON result and translate operational failures to a process status."""
+    """Run a command and translate operational failures to a process status."""
     args = _parser().parse_args(argv)
     try:
         status = 0
-        if args.command == "ask":
+        if args.command == "view":
+            asyncio.run(_view(args))
+            return 0
+        elif args.command == "ask":
             result, status = asyncio.run(_ask(args))
         elif args.command == "migrate":
             from llgm.memory.migration import copy_schema2_workspace, copy_schema3_workspace
@@ -106,6 +150,8 @@ def main(argv=None) -> int:
             )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return status
+    except KeyboardInterrupt:
+        return 0
     except (LLGMError, OSError, ValueError) as exc:
         print(f"llgm: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2

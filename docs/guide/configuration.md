@@ -5,7 +5,16 @@ and proposes connections. The **reader model** reads evidence recursively.
 The **main model** writes the final answer. Maintenance can use a small model
 that makes conservative structured decisions, while readers need to generate
 Python reliably. Each role has its own configured client. Model IDs may be shared.
-The [quickstart](quickstart.md) shows the initial setup with local storage.
+The [quickstart](quickstart.md) shows the initial setup with local storage and
+explicit BM25 search.
+
+| To configure | Read |
+| --- | --- |
+| Credentials and a local file | [Environment files](#local-environment-file) |
+| Providers and model IDs | [Providers and settings](#providers-and-settings) |
+| Local or remote search | [Search backend](#search-backend) |
+| Recursion and resource allowances | [Application limits](#application-and-maintenance-limits) and [usage](#runtime-limits-and-usage) |
+| Storage or an older workspace | [Storage choices](#storage-choices) |
 
 Once you have set the model IDs and credentials in your environment, open LLGM
 without constructing a separate settings object:
@@ -54,7 +63,11 @@ LLGM_MAIN_MODEL=your-main-model-id
 LLGM_READER_MODEL=your-reader-model-id
 LLGM_GRAPH_PROVIDER=openai
 LLGM_GRAPH_MODEL=your-graph-model-id
+LLGM_RETRIEVER_BACKEND=sqlite_fts5
 ```
+
+This selects local BM25, as in Quickstart. Use `hybrid` with a configured Modal
+service when you want semantic retrieval as well.
 
 Replace the placeholders and keep this file out of version control. You can
 export the same variables directly instead.
@@ -92,18 +105,28 @@ variables are added.
 
 ## Ask from the command line
 
-After storing sources in a workspace, ask a question without writing another
-Python script:
+Continue a conversation from the shell. This saves your question and a nonempty
+reply, using the same behavior as `answer()` in Python:
 
 ```sh
-llgm ask "What database does production use?" --workspace ./memory --env-file .env
+llgm ask "What database does Atlas use?" --conversation-id atlas --env-file .env
 ```
 
-This uses the same model configuration and Docker requirements as the Python
-API. Add `--config llgm.toml` to read a TOML file. `--workspace` overrides its
-workspace path. `--node-id` starts from a known source, and `--scope` accepts a
-JSON object selecting edge and journal applicability. It is not an access-control
-or source-search filter.
+This uses the same model configuration and DSPy sandbox requirements as the Python
+API. Add `--config llgm.toml` to select a TOML file or `--workspace ./memory`
+to override its storage path. `--conversation-id` defaults to `default`.
+
+To query without saving turns, add `--read-only`:
+
+```sh
+llgm ask "How long are backups kept?" --conversation-id atlas --read-only --env-file .env
+```
+
+`--node-id` requires `--read-only` and selects one starting node. `--scope`
+accepts a JSON object selecting applicable edges and amendments. It does not
+filter all source searches or enforce access control. `--as-of-ms` accepts a
+validity instant in Unix milliseconds, and `--query-date` supplies separate
+human-readable date context. See [query time](#query-and-validity-time).
 
 When the application returns a result, the command writes JSON containing `answer`, `status`,
 `references`, `unresolved`, and `usage`. The exit code is zero for `completed`
@@ -153,6 +176,7 @@ A minimal TOML file uses lowercase field names:
 ```toml
 [llgm]
 workspace_path = "./memory"
+retriever_backend = "sqlite_fts5"
 main_provider = "openai"
 main_model = "your-main-model-id"
 reader_provider = "openai"
@@ -180,9 +204,9 @@ URL components removed. Values loaded from an environment file have
 Provider API keys are not stored in `Settings`.
 
 Unknown application `LLGM_` keys, malformed values, unsupported providers, and
-incompatible URI/backend combinations fail explicitly. `LLGM_TEST_*` and
-`LLGM_REPL_*` belong to test and REPL configuration and are ignored when reading
-the application's environment. They are not accepted as application fields in
+incompatible URI/backend combinations fail explicitly. `LLGM_TEST_*` variables
+belong to integration tests and are ignored when reading the application's
+environment. They are not accepted as application fields in
 TOML or Python overrides.
 
 ### Native OpenAI reasoning
@@ -219,22 +243,25 @@ together. Enabling reasoning does not add another output allowance or model call
 
 ## Python node execution
 
-Inference requires a running Docker daemon and a trusted local Python image.
-`LLGM_NODE_REPL_IMAGE` selects the image, preferably by immutable digest. The
-runtime never pulls it automatically. Generated code runs in isolated containers
-with no host workspace mount or network access. Model generation and evidence
-callbacks run on the host.
+Install the `rlm` extra alongside your provider extra using the
+[Quickstart installation](quickstart.md#1-install-llgm). DSPy runs generated Python in its default
+Deno/Pyodide sandbox. The first startup can fetch runtime assets. No host paths,
+environment variables or network access are granted to generated code. Model
+requests and evidence callbacks run on the host.
 
-| Environment variable | Default | Controls |
-| --- | --- | --- |
-| `LLGM_NODE_REPL_IMAGE` | `python:3.12-slim` | Python image already present in Docker |
-| `LLGM_RETRIEVAL_K` | 12 | Maximum passages in the initial search |
-| `LLGM_MAX_SEED_NODES` | 3 | Maximum starting nodes selected from those passages |
-| `LLGM_MAX_CONCURRENCY` | 3 | Concurrent seed branches and active model calls |
-| `LLGM_MAX_JOURNAL_BYTES` | 65536 | Serialized operational journal bytes per node |
+- `LLGM_RETRIEVAL_K`, default 12. Maximum passages in the initial search.
+
+- `LLGM_MAX_SEED_NODES`, default 3. Maximum starting nodes, including the current topic.
+
+- `LLGM_MAX_CONCURRENCY`, default 3. Concurrent seed branches and active model calls.
+
+- `LLGM_MAX_JOURNAL_BYTES`, default 65536. Serialized operational journal bytes per node.
 
 `LLGM_RETRIEVAL_K` bounds initial passage retrieval, while `LLGM_MAX_SEED_NODES`
 bounds distinct admitted node owners. Require `max_seed_nodes <= retrieval_k <= 40`.
+The current topic takes the first slot, and search can fill the rest. Without a
+current topic, search supplies all seeds. See [node selection](node-search.md)
+for read-only overrides and skipped retrieval.
 `LLGM_MAX_CONCURRENCY` queues excess admitted branches and bounds active model
 calls. It does not silently select a smaller seed set. Explicit seed-limit skips
 and operational failures remain visible as unresolved outcomes.
@@ -262,15 +289,22 @@ variables. They also work as keyword arguments to `LLGM.from_settings()`:
 | Option | Default | Controls |
 | --- | --- | --- |
 | `max_depth` | 3 | Recursive depth beyond each starting node, which has depth zero |
-| `max_steps` | 16 | Model steps within each node invocation |
+| `max_steps` | 16 | DSPy action iterations per node, followed by an extraction call if needed |
 | `max_operations` | 128 | Shared operation allowance across the answer |
 | `passage_chars` | 2048 | Character bound for default source indexing passages |
 | `capture_text` | `False` | Additional model-output and code capture in traces |
 
-For Docker CPU, memory or execution limits, pass a `DockerREPLConfig` as
-`repl_config`. An explicit `repl_config` replaces the configuration built from
-`LLGM_NODE_REPL_IMAGE`. Its fields are in the
-[Python execution reference](../reference/api.md#docker-python-execution).
+Pass `SandboxConfig` as `repl_config` to bound startup and execution time,
+context and code bytes, printed output, and returned findings. These are admission
+limits. They do not provide operating-system CPU or memory quotas. The fields
+are in the [Python execution reference](../reference/api.md#dspy-python-execution).
+All DSPy action, extraction and plain subquery calls consume the shared model
+budget, including the final extraction after `max_steps` iterations.
+
+For tests or another sandbox, `interpreter_factory` accepts a zero-argument
+factory returning a synchronous DSPy `CodeInterpreter`. It must own its isolation
+and finish shutdown within a bounded time. The default uses `PythonInterpreter`
+with no extra permissions.
 
 ```python
 from llgm import Budget, LLGM, MaintenancePolicy
@@ -289,16 +323,14 @@ async def ask_with_limits(settings, question):
         return await memory.answer(question)
 ```
 
-Maintenance settings apply when ingesting or organizing sources. They do not
-change the inference budget. LLGM normally retrieves seeds before node inference.
-An explicit `answer(..., node_id=..., remember=False)` bypasses retrieval
-and supplies one seed.
+The policy's budget governs import routing and connection discovery. Routing
+within `answer()` uses the answer budget instead. `propose` still permits topic
+routing, while `disabled` turns off both model routing and connection discovery.
+See [organization controls](conversations.md#control-automatic-organization)
+for when each operation runs and where its results appear.
 
-The default maintenance mode is `validated`, which checks proposed relationships
-and publishes accepted links. `propose` returns proposals for review, and
-`disabled` skips maintenance. Original sources remain stored if maintenance
-fails. To skip connection proposals for one ingestion, pass `organize=False`
-to `ingest()`. Topic routing still runs.
+Source writes survive a later maintenance failure. Connection validation checks
+structure and source references, not whether the proposed relationship is true.
 
 ### Change limits for one answer
 
@@ -317,9 +349,51 @@ async def ask_with_more_time(memory, question):
     return await memory.answer(question, budget=budget)
 ```
 
+## Search backend
+
+`LLGM.from_settings()` and `llgm view` default to hybrid BM25 and ColBERTv2.
+Install the `modal` extra and authenticate the Modal SDK. The selected deployment
+must expose `prepare_workspace` and `search_workspace` with LLGM's pinned
+ColBERT checkpoint. Installing the client alone does not deploy that service.
+This path is for applications with that service already available.
+
+Before publication, install the client extra from the repository:
+
+```sh
+python -m pip install 'llgm[modal] @ git+https://github.com/simjay/llgm.git'
+```
+
+Authenticate using your Modal account's SDK configuration, then set the app
+and environment names below. See [Modal's deployed-function guide](https://modal.com/docs/guide/trigger-deployed-functions)
+for calling an existing deployment.
+
+- `LLGM_RETRIEVER_BACKEND`, default `hybrid`. Hybrid source ranking or explicit `sqlite_fts5` for local BM25.
+
+- `LLGM_RETRIEVAL_MODAL_APP`, default `llgm-colbert`. Authenticated Modal application.
+
+- `LLGM_RETRIEVAL_MODAL_ENVIRONMENT`, default empty. Modal's configured default environment.
+
+The first source search uploads the workspace's source snapshot for indexing.
+After source appends, the next search uploads a complete updated source
+snapshot and prepares another generation. This includes new questions and
+replies saved by `answer()`. Source text, metadata and derived indexes remain
+on the deployment's volume. Unchanged searches reuse the index.
+This work can incur Modal charges. Graph browsing alone does not contact Modal.
+See [node search](node-search.md) for fusion, small-corpus behavior, and indexing limits.
+
+For a local setup without a semantic service, explicitly select BM25:
+
+```sh
+export LLGM_RETRIEVER_BACKEND=sqlite_fts5
+```
+
+Storage primitives such as `Evidence.open(workspace)` and direct `LLGM(...)`
+construction retain local lexical retrieval unless supplied an evidence factory.
+The settings factory owns configuration of the default hybrid application path.
+
 ## Use your own search backend
 
-The default local index updates from new workspace records automatically. To use
+The configured indexes update from new workspace records automatically. To use
 another source retriever, supply an async factory that returns an open `Evidence`
 handle. This helper assumes the retriever already indexes sources in the workspace:
 
@@ -348,7 +422,8 @@ in the local index.
 
 You own the supplied retriever, including index updates and cleanup. LLGM closes
 each returned evidence handle after use. Setting `LLGM_RETRIEVER_BACKEND` to a
-name other than `sqlite_fts5` does not create an adapter. It requires this factory.
+name other than `hybrid` or `sqlite_fts5` requires this factory. An explicit
+factory also overrides either built-in selection.
 See [node search](node-search.md) for backend choices and passage references.
 
 ## Own directly constructed clients
@@ -381,25 +456,11 @@ async def ask_with_clients(main_model_id, reader_model_id, graph_model_id, quest
         return await memory.answer(question)
 ```
 
-This helper needs both provider extras and credentials, plus the local Docker
-image. When constructing a native adapter around an existing SDK client, the
+This helper needs both provider extras and credentials, plus the `rlm` extra and its
+sandbox. When constructing a native adapter around an existing SDK client, the
 adapter borrows it. Closing that adapter does not close the supplied SDK client.
 
 ## Storage choices
-
-This version uses workspace metadata schema 5. Schema 4 workspaces must be
-rebuilt from their original inputs. They are rejected without changing their data. To copy an existing local
-schema-3 workspace into a new directory while preserving original evidence:
-
-```sh
-llgm migrate ./old-memory ./new-memory
-```
-
-The source stays unchanged. Point `LLGM_WORKSPACE_PATH` at the new directory.
-Schema-2 migration also requires `--journal-roles` with explicit pointer
-classifications. No automatic in-place migration runs when a workspace opens.
-
-
 
 The default workspace stores source blobs locally and metadata in SQLite.
 `LLGM_WORKSPACE_PATH` defaults to `./memory`. Unless overridden, blob files go in
@@ -427,6 +488,18 @@ The current workspace metadata format is schema 5, with independent primary
 edges and a compact operational journal. Schema-2 source blobs and journal record
 identities remain valid within it. Opening an older workspace does not silently
 change its graph meaning. Schema-1 versioned-source workspaces remain unsupported.
+Schema 4 workspaces are rejected without changing their data and must be rebuilt
+from their original inputs.
+
+To copy an existing local schema-3 workspace into a new directory while
+preserving original evidence:
+
+```sh
+llgm migrate ./old-memory ./new-memory
+```
+
+The source stays unchanged. Point `LLGM_WORKSPACE_PATH` at the new directory.
+No automatic in-place migration runs when a workspace opens.
 
 For a local schema-2 workspace, classify each reference-valued journal record
 explicitly as `edge`, `amendment`, or `unresolved`, then copy it to a new location:
@@ -441,8 +514,8 @@ history but block operational reads until resolved. The converter preserves the
 original workspace, source IDs, original bytes, journal references, and retry
 records. It refuses an existing destination and never guesses a pointer's role.
 The [API reference](../reference/api.md#storage-transition) exposes the equivalent
-Python function. This is a narrow schema-2 copy operation, not general migration
-or automatic source-version conversion.
+Python function for the schema-2 copy. These converters handle only the described
+local workspace formats.
 
 ## Query and validity time
 
@@ -468,24 +541,32 @@ An answer may observe records added while it runs.
 All branches and recursive children share one answer budget. These settings
 control the answer limits:
 
-| Environment variable | Default | Limits |
-| --- | --- | --- |
-| `LLGM_MAX_MODEL_CALLS` | 40 | Total model calls, including final synthesis |
-| `LLGM_MAX_READER_CALLS` | 36 | Calls used to investigate evidence |
-| `LLGM_MAX_GRAPH_CALLS` | 8 | Topic routing calls within an answer |
-| `LLGM_MAX_SEARCHES` | 8 | Retrieval calls |
-| `LLGM_MAX_EVIDENCE_TOKENS` | 65536 | Evidence exposed during the answer |
-| `LLGM_MAX_BUNDLE_TOKENS` | 8000 | Selected evidence returned for synthesis |
-| `LLGM_MAX_CONTEXT_TOKENS` | 65536 | Accounted context for a model call |
-| `LLGM_MAX_OUTPUT_TOKENS` | 2048 | Requested output allowance per call |
-| `LLGM_TIMEOUT_SECONDS` | 120 | Deadline for preparation and inference |
+- `LLGM_MAX_MODEL_CALLS`, default 40. Total model calls, including final synthesis.
+
+- `LLGM_MAX_READER_CALLS`, default 36. Calls used to investigate evidence.
+
+- `LLGM_MAX_GRAPH_CALLS`, default 8. Topic routing calls within an answer.
+
+- `LLGM_MAX_SEARCHES`, default 8. Retrieval calls.
+
+- `LLGM_MAX_EVIDENCE_TOKENS`, default 65536. Evidence exposed during the answer.
+
+- `LLGM_MAX_BUNDLE_TOKENS`, default 8000. Selected evidence returned for synthesis.
+
+- `LLGM_MAX_CONTEXT_TOKENS`, default 65536. Accounted context for a model call.
+
+- `LLGM_MAX_OUTPUT_TOKENS`, default 2048. Requested output allowance per call.
+
+- `LLGM_TIMEOUT_SECONDS`, default 120. Deadline for preparation and inference.
 
 Use constructor options for depth, steps and operations, as shown above.
 Connection proposals have a separate budget. Ordinary `LLGM` answers have no spending cap
 in dollars.
 
-Cleanup still runs after a deadline or cancellation. Releasing an interpreter
-can extend the time until the call returns.
+Connection maintenance after a new conversational topic uses a separate
+allowance, so the answer deadline is not a wall-clock bound for the entire
+application call. Cleanup also runs after deadlines or cancellation and can
+extend the time until the call returns.
 
 The default text allowance counts UTF-8 bytes. It is a conservative accounting
 unit rather than a provider tokenizer, despite the `_TOKENS` setting names.
@@ -500,5 +581,5 @@ retains model output and code. Referenced evidence and metadata can still contai
 source data when text capture is disabled. Treat traces as application data.
 
 See [result handling](quickstart.md#understand-the-result) for answer status and
-exception behavior, and [specialized execution interfaces](../reference/api.md#specialized-execution-interfaces)
-for other ways to supply context and control retrieval.
+exception behavior. The [node execution API](../reference/api.md#effective-reads-and-node-execution)
+accepts caller-selected seeds when your application owns retrieval.

@@ -53,7 +53,9 @@ workflow does not configure a PyPI account or create a package release.
 
 1. Set a new version in `pyproject.toml` and review package metadata and release
    notes. For the first release, update the installation guides and README that
-   currently describe LLGM as unpublished. README assets and repository links
+   currently describe LLGM as unpublished, after verifying the release is available.
+   Keep checkout documentation aligned with its own API when a released version
+   has older behavior. README assets and repository links
    use absolute URLs so the package index can resolve them.
 2. Run `make check`, `make docs`, and `make build`. Commit and push the release
    changes, including both workflow files. Use that reviewed commit for the tag.
@@ -151,7 +153,8 @@ requires browser network access. Text and tables explain the same flows.
 
 ## Published sources
 
-`docs/` is the only published prose source. Its index owns two sections:
+`docs/index.md`, `docs/guide/` and `docs/reference/` contain the published prose.
+The root index owns two sections:
 User guide and Reference. Sphinx extracts public Python API reference from
 the installed package's docstrings. Images and shared site assets live under
 `docs/_static/`.
@@ -195,8 +198,9 @@ for the hosting interfaces. Read the Docs assigns the project URL when the
 repository is imported.
 
 The build imports the installed library for API documentation. It needs no
-provider credentials, model downloads, Docker, or GPU. Keep API keys out of the
-documentation build environment.
+provider credentials, model downloads, or a GPU. The separate CI sandbox job uses fixed model outputs with real Deno/Pyodide and may
+download runtime assets. It is not part of the documentation build. Keep API keys
+out of the documentation build environment.
 
 ## Maintain the site
 

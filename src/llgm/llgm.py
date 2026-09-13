@@ -25,11 +25,12 @@ from llgm.core.types import (
     IngestResult,
     NodeRef,
     Turn,
+    reference_from_dict,
     reference_to_dict,
 )
 from llgm.inference.budget import Budget, RunLedger, byte_token_bound
 from llgm.inference.nodes import NodeRuntime, NodeSeed
-from llgm.inference.repl import DockerREPLConfig
+from llgm.inference.repl import SandboxConfig
 from llgm.inference.results import AnswerResult, EvidenceBundle
 from llgm.memory.evidence import (
     Evidence,
@@ -52,11 +53,12 @@ class IngestionOutcome:
 
 
 class LLGM:
-    """Retrieve seed nodes, query local Python delegates, and synthesize their findings.
+    """Continue a conversation, investigate its evidence, and synthesize reader findings.
 
     Workspace and model clients are caller-owned. Maintenance failure does not
-    roll back source ingestion. Initial retrieval runs before model inference.
-    Selected seed branches share one run budget and citation registry. Delegates
+    roll back source ingestion. The current topic is the first default seed,
+    and retrieval can add other nodes. Selected seed branches share one run
+    budget and citation registry. Delegates
     inspect journal-corrected source slices through isolated Python interpreters.
     Primary edges organize discovery independently of journal amendments.
     """
@@ -80,8 +82,8 @@ class LLGM:
         max_journal_bytes: int = 65536,
         capture_text: bool = False,
         evidence_factory: Callable[..., Awaitable[Evidence]] | None = None,
-        repl_config: DockerREPLConfig | None = None,
-        repl_factory: Callable[..., Any] | None = None,
+        repl_config: SandboxConfig | None = None,
+        interpreter_factory: Callable[..., Any] | None = None,
     ):
         """Bind clients and an optional async evidence factory without performing I/O.
 
@@ -108,10 +110,10 @@ class LLGM:
             raise ConfigurationError("capture_text must be a boolean")
         if evidence_factory is not None and not callable(evidence_factory):
             raise ConfigurationError("evidence_factory must be an async callable")
-        if repl_factory is not None and not callable(repl_factory):
-            raise ConfigurationError("repl_factory must be callable")
-        if repl_config is not None and not isinstance(repl_config, DockerREPLConfig):
-            raise ConfigurationError("repl_config must be a DockerREPLConfig")
+        if interpreter_factory is not None and not callable(interpreter_factory):
+            raise ConfigurationError("interpreter_factory must be callable")
+        if repl_config is not None and not isinstance(repl_config, SandboxConfig):
+            raise ConfigurationError("repl_config must be a SandboxConfig")
         for name, value in (
             ("max_depth", max_depth),
             ("max_steps", max_steps),
@@ -138,7 +140,7 @@ class LLGM:
         self.max_concurrency, self.max_journal_bytes = max_concurrency, max_journal_bytes
         self.capture_text = capture_text
         self.evidence_factory = evidence_factory
-        self.repl_config, self.repl_factory = repl_config, repl_factory
+        self.repl_config, self.interpreter_factory = repl_config, interpreter_factory
         self.last_maintenance: MaintenanceResult | None = None
         self.last_trace: list[dict] = []
         self.last_usage: dict = {}
@@ -158,7 +160,8 @@ class LLGM:
         """Own configured workspace and model clients for one async application context.
 
         Native and explicitly configured compatible model adapters are supported.
-        The default evidence factory uses the workspace's local lexical index.
+        Hybrid BM25 and ColBERT retrieval is the configured default.
+        Source indexing and semantic search run lazily through Modal.
         Other retrieval selections require an explicit ``evidence_factory``.
         Construction or user-code failure closes every resource already created.
 
@@ -185,7 +188,7 @@ class LLGM:
             raise ConfigurationError("evidence_factory must be an async callable")
         if settings.metadata_backend != "sqlite":
             raise CapabilityError("The application settings factory requires sqlite metadata")
-        if settings.retriever_backend != "sqlite_fts5" and evidence_factory is None:
+        if settings.retriever_backend not in {"hybrid", "sqlite_fts5"} and evidence_factory is None:
             raise CapabilityError("Custom retrieval requires an explicit evidence_factory")
         options = {
             "inference_budget": Budget(
@@ -200,11 +203,15 @@ class LLGM:
                     "max_journal_bytes",
                 )
             },
-            "repl_config": DockerREPLConfig(image=settings.node_repl_image),
+            "repl_config": SandboxConfig(),
             **runtime_options,
         }
         async with AsyncExitStack() as stack:
             workspace = await stack.enter_async_context(Workspace.open(settings=settings))
+            if evidence_factory is None:
+                from llgm.retrieval.workspace import configured_evidence_factory
+
+                evidence_factory = configured_evidence_factory(workspace, settings)
             clients = []
             for role in ("main", "reader", "graph"):
                 client = create_model(
@@ -474,9 +481,11 @@ class LLGM:
         :param question: New user text or new role/content turns ending in a user
             message. Send only new turns, not the accumulated transcript.
         :param conversation_id: Stable chat identity, resumed across application restarts.
-            Topic changes can select a different node within the same chat.
+            Its current topic is the first default reading node, including for
+            read-only questions. Topic changes can select another node in this chat.
         :param remember: Save incoming turns and the returned assistant text.
-            False performs a read-only memory question and requires plain text.
+            False requires plain text and reads without changing history or the
+            current topic pointer.
         :param scope: Declared evidence applicability values, not access control.
         :param query_date: Human-readable date for interpreting evidence.
         :param as_of_ms: Declared evidence validity instant in Unix milliseconds.
@@ -490,15 +499,24 @@ class LLGM:
         """
         if type(remember) is not bool:
             raise ConfigurationError("remember must be boolean")
+        if not isinstance(conversation_id, str) or not conversation_id.strip():
+            raise ConfigurationError("conversation_id must be nonempty text")
         if not remember:
-            return await self._answer(
+            active_node_id = (
+                await self.workspace.conversation_node(conversation_id) if node_id is None else None
+            )
+            result = await self._answer(
                 question,
                 scope=scope,
                 query_date=query_date,
                 as_of_ms=as_of_ms,
                 budget=budget,
                 node_id=node_id,
+                active_node_id=active_node_id,
             )
+            if active_node_id is not None:
+                result.conversation_id, result.node_id = conversation_id, active_node_id
+            return result
         if node_id is not None:
             raise ConfigurationError("node_id requires remember=False")
         if scope is not None and not isinstance(scope, Mapping):
@@ -640,19 +658,12 @@ class LLGM:
                     page = await self.workspace.source_info(
                         active_node_id, offset=max(0, page["total_turns"] - 4), limit=4
                     )
-                    from llgm.core.types import reference_from_dict
-
                     refs = tuple(reference_from_dict(item["reference"]) for item in page["turns"])
-                    existing = next(
-                        (seed.references for seed in seeds if seed.node_id == active_node_id), ()
+                    # _seeds already selects and caps current-first targets.
+                    # Enrich its first seed without choosing the nodes again.
+                    seeds[0] = replace(
+                        seeds[0], references=tuple(dict.fromkeys((*refs, *seeds[0].references)))
                     )
-                    seeds = [
-                        NodeSeed(active_node_id, tuple(dict.fromkeys((*refs, *existing)))),
-                        *(seed for seed in seeds if seed.node_id != active_node_id),
-                    ]
-                    # The active topic occupies one seed slot even for a follow-up
-                    # whose wording has no lexical match with earlier evidence.
-                    seeds = seeds[: self.max_seed_nodes]
                     preparation_ledger.events.append(
                         {"kind": "conversation_seed", "node_id": active_node_id}
                     )
@@ -674,7 +685,7 @@ class LLGM:
                     max_operations=self.max_operations,
                     max_concurrency=self.max_concurrency,
                     repl_config=self.repl_config,
-                    repl_factory=self.repl_factory,
+                    interpreter_factory=self.interpreter_factory,
                     capture_text=self.capture_text,
                     conversational=active_node_id is not None,
                 )
@@ -741,7 +752,7 @@ class LLGM:
         return result
 
     async def _seeds(self, question, node_id, evidence, ledger, *, active_node_id=None):
-        """Rank unique source owners without exposing raw retrieval text to models."""
+        """Start at the current topic and use retrieval to fill remaining seed slots."""
         if node_id is not None:
             ledger.events.append(
                 {
@@ -752,6 +763,23 @@ class LLGM:
                 }
             )
             return [NodeSeed(node_id, (NodeRef(node_id),))]
+        if active_node_id is not None and (
+            self.max_seed_nodes == 1 or ledger.searches >= ledger.budget.max_searches
+        ):
+            # A known current node does not require rediscovery. Routing may
+            # already have spent the search allowance before this reading phase.
+            ledger.events.append(
+                {
+                    "kind": "seed_selection",
+                    "source": "conversation",
+                    "selected": [active_node_id],
+                    "skipped": [],
+                    "retrieval_skipped": "seed_limit"
+                    if self.max_seed_nodes == 1
+                    else "search_limit",
+                }
+            )
+            return [NodeSeed(active_node_id)]
         if ledger.searches >= ledger.budget.max_searches:
             raise BudgetExceeded("Initial retrieval search allowance exhausted")
         ledger.searches += 1

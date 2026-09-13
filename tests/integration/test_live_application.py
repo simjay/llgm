@@ -11,8 +11,6 @@ import asyncio
 import hashlib
 import json
 import os
-import re
-import subprocess
 from contextlib import AsyncExitStack
 from dataclasses import asdict
 from datetime import timezone
@@ -24,14 +22,14 @@ from llgm.core.types import Conversation, NodeRef, Provenance, SourceSpan, refer
 from llgm.evaluation.artifacts import write_json, write_jsonl
 from llgm.evaluation.scoring import evidence_coverage
 from llgm.inference.budget import Budget
-from llgm.inference.repl import DockerREPLConfig
+from llgm.inference.repl import SandboxConfig
 from llgm.llgm import LLGM, MaintenancePolicy
 from llgm.memory.evidence import Evidence
 from llgm.memory.query import QueryEvidence
 from llgm.memory.workspace import Workspace
 from llgm.models import create_model
 
-pytestmark = [pytest.mark.integration, pytest.mark.dataset, pytest.mark.live, pytest.mark.docker]
+pytestmark = [pytest.mark.integration, pytest.mark.dataset, pytest.mark.live, pytest.mark.sandbox]
 
 
 @pytest.fixture
@@ -60,35 +58,14 @@ def live_application():
 
 
 @pytest.fixture
-def application_docker(live_application):
-    """Require the Docker gate and pin an already-local image before constructing hosted clients."""
-    enabled = os.environ.get("LLGM_TEST_DOCKER", "0")
-    if enabled == "0":
-        pytest.skip("Set LLGM_TEST_DOCKER=1 for Python node delegates")
-    if enabled != "1":
-        pytest.fail("LLGM_TEST_DOCKER must be exactly 0 or 1", pytrace=False)
-    requested = os.environ.get("LLGM_REPL_DOCKER_IMAGE", "").strip()
-    if not requested:
-        pytest.fail("Set LLGM_REPL_DOCKER_IMAGE to a trusted local image", pytrace=False)
-    try:
-        result = subprocess.run(
-            ["docker", "image", "inspect", "--format", "{{.Id}}", requested],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        pytest.fail(
-            "Application integration requires an available local Docker daemon", pytrace=False
-        )
-    identity = result.stdout.strip()
-    if result.returncode or not re.fullmatch(r"sha256:[0-9a-f]{64}", identity):
-        pytest.fail("Configured Docker image is unavailable; no image was pulled", pytrace=False)
+def application_sandbox(live_application):
+    """Identify the installed DSPy sandbox before constructing hosted clients."""
+    from importlib.metadata import version
+
     return {
-        "requested_image": requested,
-        "image_id": identity,
-        "config": DockerREPLConfig(image=identity),
+        "dspy_version": version("dspy"),
+        "deno_version": version("deno"),
+        "config": SandboxConfig(),
     }
 
 
@@ -158,7 +135,7 @@ def _safe_trace(trace):
 
 
 def test_autonomous_memory_application(
-    live_application, application_docker, longmemeval, tmp_path, integration_record
+    live_application, application_sandbox, longmemeval, tmp_path, integration_record
 ):
     """Real models maintain a full history and answer its original question without oracle routing."""
     case = longmemeval.cases["001be529"]
@@ -196,7 +173,9 @@ def test_autonomous_memory_application(
             "read_policy": "current",
             "workspace_schema": 3,
             "execution": "python-node-delegates-v1",
-            "docker": {key: value for key, value in application_docker.items() if key != "config"},
+            "sandbox": {
+                key: value for key, value in application_sandbox.items() if key != "config"
+            },
             "seed_policy": {"max_seed_nodes": 3, "retrieval_k": 10, "max_concurrency": 2},
             "scope": "autonomous application sanity; full history; ordinary seed retrieval and Python delegates; no oracle handles; semantic quality scored separately",
             "models": live_application,
@@ -229,7 +208,7 @@ def test_autonomous_memory_application(
                     max_seed_nodes=3,
                     retrieval_k=10,
                     max_concurrency=2,
-                    repl_config=application_docker["config"],
+                    repl_config=application_sandbox["config"],
                 )
                 for source in case.sources:
                     await app.ingest(
@@ -352,7 +331,7 @@ def test_autonomous_memory_application(
 
 
 def test_controlled_application_updates_restart_and_scopes(
-    live_application, application_docker, tmp_path, integration_record
+    live_application, application_sandbox, tmp_path, integration_record
 ):
     """Python delegates use amended source spans and independent edges across scoped updates and restart."""
     record, directory = integration_record
@@ -440,7 +419,9 @@ def test_controlled_application_updates_restart_and_scopes(
             "read_policy": "current",
             "workspace_schema": 3,
             "execution": "python-node-delegates-v1",
-            "docker": {key: value for key, value in application_docker.items() if key != "config"},
+            "sandbox": {
+                key: value for key, value in application_sandbox.items() if key != "config"
+            },
             "seed_policy": {"max_seed_nodes": 3, "retrieval_k": 10, "max_concurrency": 2},
             "maintenance_policy": asdict(policy),
             "inference_budget_per_answer": asdict(budget),
@@ -498,7 +479,7 @@ def test_controlled_application_updates_restart_and_scopes(
                     max_seed_nodes=3,
                     retrieval_k=10,
                     max_concurrency=2,
-                    repl_config=application_docker["config"],
+                    repl_config=application_sandbox["config"],
                 )
                 for node_id, text in sources:
                     await app.ingest(
@@ -590,7 +571,7 @@ def test_controlled_application_updates_restart_and_scopes(
                     max_seed_nodes=3,
                     retrieval_k=10,
                     max_concurrency=2,
-                    repl_config=application_docker["config"],
+                    repl_config=application_sandbox["config"],
                 )
                 record["reopened_source_node_ids"] = list(await reopened.source_ids())
                 record["original_source_retained"] = (

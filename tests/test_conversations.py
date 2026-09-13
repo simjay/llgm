@@ -8,6 +8,7 @@ import pytest
 
 from llgm import LLGM, Conversation, MaintenancePolicy, SourceSpan, Workspace
 from llgm.core.errors import ConfigurationError, SchemaError
+from llgm.inference.budget import Budget
 from llgm.memory.evidence import Evidence
 from llgm.memory.migration import copy_schema3_workspace
 from llgm.models import CallableModelClient, ModelResponse
@@ -37,7 +38,7 @@ def router(decisions=()):
     return CallableModelClient(respond)
 
 
-def application(workspace, *, routing=None, models=None):
+def application(workspace, *, routing=None, models=None, **options):
     """Construct the actual application using finite local interpreter callbacks."""
     models = models or Models()
     return LLGM(
@@ -45,7 +46,8 @@ def application(workspace, *, routing=None, models=None):
         main_model=models.main,
         reader_model=models.reader,
         graph_model=routing or router(),
-        repl_factory=ReplayFactory(),
+        interpreter_factory=ReplayFactory(),
+        **options,
     )
 
 
@@ -81,6 +83,99 @@ def test_answer_persists_followups_in_one_topic_across_restart(tmp_path):
             assert (await workspace.resolve(span)).text == original
             assert len((await workspace.source(first.node_id)).turns) == 6
             assert third.usage["model_calls"] >= 4
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("question", ["And that?", "backups"])
+def test_readonly_followup_starts_at_its_session_pointer_after_restart(tmp_path, question):
+    """The session's current node precedes search hits and another session's newer activity."""
+
+    async def scenario():
+        """Read persisted current evidence without appending turns or moving either pointer."""
+        async with Workspace.open(tmp_path) as workspace:
+            current = await workspace.append_conversation(
+                "project",
+                Conversation.from_turns([{"role": "user", "content": "We use PostgreSQL."}]),
+            )
+            other = await workspace.append_conversation(
+                "other",
+                Conversation.from_turns([{"role": "user", "content": "Backups run nightly."}]),
+            )
+        async with Workspace.open(tmp_path) as workspace:
+            result = await application(workspace).answer(
+                question, conversation_id="project", remember=False
+            )
+            selected = [current.node_id]
+            if question == "backups":
+                selected.append(other.node_id)
+            event = next(event for event in result.trace if event["kind"] == "seed_selection")
+            assert result.status == "completed"
+            assert event["selected"] == selected
+            assert {ref.node_id for ref in result.references} == set(selected)
+            assert result.conversation_id == "project" and result.node_id == current.node_id
+            assert await workspace.conversation_node("project") == current.node_id
+            assert await workspace.conversation_node("other") == other.node_id
+            assert len((await workspace.source(current.node_id)).turns) == 1
+            assert len((await workspace.source(other.node_id)).turns) == 1
+
+    asyncio.run(scenario())
+
+
+def test_one_seed_uses_current_pointer_and_explicit_node_overrides_it(tmp_path, monkeypatch):
+    """A known single target needs no search, and an explicit target does not move the pointer."""
+
+    async def unexpected_search(*args, **kwargs):
+        """Reject any attempt to rediscover a node whose identity is already known."""
+        raise AssertionError("The known reading node must not require search")
+
+    async def scenario():
+        """Resolve both implicit and explicit targets through actual evidence reads."""
+        async with Workspace.open(tmp_path) as workspace:
+            current = await workspace.append_conversation(
+                "project",
+                Conversation.from_turns([{"role": "user", "content": "We use PostgreSQL."}]),
+            )
+            other = await workspace.append_conversation(
+                "other",
+                Conversation.from_turns([{"role": "user", "content": "Backups run nightly."}]),
+            )
+            monkeypatch.setattr(Evidence, "search", unexpected_search)
+            app = application(workspace, max_seed_nodes=1)
+            for target, expected in [(None, current.node_id), (other.node_id, other.node_id)]:
+                result = await app.answer(
+                    "And that?", conversation_id="project", remember=False, node_id=target
+                )
+                assert result.status == "completed"
+                assert result.usage["searches"] == 0
+                assert {ref.node_id for ref in result.references} == {expected}
+                assert await workspace.conversation_node("project") == current.node_id
+            assert len((await workspace.source(current.node_id)).turns) == 1
+            assert len((await workspace.source(other.node_id)).turns) == 1
+
+    asyncio.run(scenario())
+
+
+def test_routing_search_cannot_exhaust_reading_of_the_current_node(tmp_path):
+    """Spending the search allowance on routing still permits reading the known active topic."""
+
+    async def scenario():
+        """Continue an existing topic with one shared search available for the whole answer."""
+        async with Workspace.open(tmp_path) as workspace:
+            current = await workspace.append_conversation(
+                "project",
+                Conversation.from_turns([{"role": "user", "content": "We use PostgreSQL."}]),
+            )
+            result = await application(workspace).answer(
+                "And that?", conversation_id="project", budget=Budget(max_searches=1)
+            )
+            assert result.status == "completed"
+            assert result.usage["searches"] == 1
+            assert {ref.node_id for ref in result.references} == {current.node_id}
+            event = next(event for event in result.trace if event["kind"] == "seed_selection")
+            assert event["selected"] == [current.node_id]
+            assert event["retrieval_skipped"] == "search_limit"
+            assert len((await workspace.source(current.node_id)).turns) == 3
 
     asyncio.run(scenario())
 

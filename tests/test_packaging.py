@@ -48,13 +48,13 @@ os.makedirs = blocked
 builtins.open = read_only_open
 
 import llgm
-for name in ('llgm.llgm', 'llgm.core', 'llgm.memory', 'llgm.inference', 'llgm.models', 'llgm.retrieval', 'llgm.evaluation', 'llgm.storage', 'llgm.cli'):
+for name in ('llgm.llgm', 'llgm.core', 'llgm.memory', 'llgm.inference', 'llgm.models', 'llgm.retrieval', 'llgm.retrieval.colbert', 'llgm.retrieval.modal', 'llgm.evaluation', 'llgm.storage', 'llgm.cli', 'llgm.viewer'):
     importlib.import_module(name)
 
 assert llgm.LLGM.__module__ == 'llgm.llgm'
 origin = Path(llgm.__file__).resolve()
 assert not origin.is_relative_to(checkout_source), origin
-for package in ('openai', 'anthropic', 'boto3', 'torch', 'transformers', 'colbert'):
+for package in ('openai', 'anthropic', 'boto3', 'torch', 'transformers', 'colbert', 'dspy', 'deno', 'litellm'):
     assert package not in sys.modules, f'Optional dependency imported eagerly: {package}'
 assert set(Path.cwd().iterdir()) == before
 print(json.dumps({'origin': str(origin), 'import_side_effects': False}))
@@ -67,9 +67,13 @@ from importlib.resources import files
 import json
 
 package = files('llgm')
+for asset in ('index.html', 'app.js', 'style.css', 'record.html', 'record.js'):
+    assert package.joinpath('viewer', asset).is_file(), f'Missing graph viewer asset: {asset}'
 assert package.joinpath('py.typed').is_file(), 'Wheel is missing the PEP 561 marker'
 for module in ('core', 'memory', 'inference', 'models', 'retrieval', 'evaluation', 'storage'):
     assert package.joinpath(module, '__init__.py').is_file(), module
+for retired in ('iterative.py', 'recursive.py', 'rlm.py'):
+    assert not package.joinpath('inference', retired).is_file(), f'Retired runtime packaged: {retired}'
 
 dist = distribution('llgm')
 assert dist.metadata['Name'] == 'llgm'

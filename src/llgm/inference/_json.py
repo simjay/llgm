@@ -1,4 +1,4 @@
-"""JSON boundaries shared by inference protocols and the Docker transport."""
+"""JSON boundaries shared by inference protocols and JSON context admission."""
 
 import json
 

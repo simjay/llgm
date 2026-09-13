@@ -35,7 +35,7 @@ from llgm.evaluation.baselines import answer_baseline
 from llgm.evaluation.benchmark_preflight import preflight_runtime
 from llgm.evaluation.costs import Allowance, make_token_pacer, recorded_model
 from llgm.evaluation.longmemeval import EvaluationCase, anonymize_case, load_longmemeval
-from llgm.inference.repl import DockerREPLConfig
+from llgm.inference.repl import SandboxConfig
 from llgm.models.hosted import OpenAICompatibleModelClient, OpenAIModelClient
 
 ARMS = ("llgm", "bm25", "full_context")
@@ -205,7 +205,7 @@ async def run_trial(case, arm, protocol, directory, clients, allowance, *, pacin
                     budget=Budget(**policy["budget"]),
                 ),
                 inference_budget=Budget(**protocol["budget"]),
-                repl_config=DockerREPLConfig(**protocol["docker"]),
+                repl_config=SandboxConfig(**protocol["sandbox"]),
                 capture_text=True,
                 **protocol["runtime"],
             )
@@ -319,7 +319,7 @@ def summarize(planned: list[dict], trials: list[dict], judgments: list[dict]) ->
             if unknown or len(observed) != len(keys)
             else known / len(keys),
             "total_cost_usd": None,
-            "total_cost_limitation": "Local CPU, Docker and storage are measured but unpriced",
+            "total_cost_limitation": "Local CPU, sandbox and storage are measured but unpriced",
             "median_query_seconds": statistics.median(latencies) if latencies else None,
             "p95_query_seconds": sorted(latencies)[math.ceil(0.95 * len(latencies)) - 1]
             if latencies

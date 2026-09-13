@@ -2,7 +2,7 @@
 
 The replay adapter recognizes a finite set of test commands and invokes real
 host callbacks. It never evaluates model-generated code. Actual Python transport
-is covered separately by opted-in Docker tests.
+is covered separately by opted-in sandbox tests.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from llgm.core.errors import BudgetExceeded, ProviderError, ReferenceResolutionE
 from llgm.core.types import NodeRef, ResolvedEvidence, SourceSpan, reference_to_dict
 from llgm.inference.budget import Budget, RunLedger
 from llgm.inference.nodes import NodeRuntime, NodeSeed
-from llgm.inference.repl import DockerREPLConfig, REPLResult
+from llgm.inference.repl import SandboxConfig
 from llgm.models import CallableModelClient, ModelCapabilities, ModelResponse
 from tests.node_support import (
     BAD_READ,
@@ -29,35 +29,41 @@ from tests.node_support import (
     Models,
     ReplayFactory,
     ReplayREPL,
+    action,
     finish,
+    history,
+    node_context,
+    observation,
+    step,
+    submit,
 )
 
 THIRD_CHILD = 'print(query_node("c", "Find the date"))'
 
 
 def third_node_replay(*, exhaust_after=None):
-    """Replay a declared C query and optional exhaustion after a completed callback."""
+    """Replay a third-node tool call and explicit post-delivery budget exhaustion."""
     owner = ReplayFactory()
 
     class ThirdNodeReplay(ReplayREPL):
-        """Recognize one additional command without evaluating generated Python."""
+        """Exercise real host callbacks with a finite synchronous interpreter."""
 
-        async def execute(self, code):
-            """Complete callback delivery before injecting an explicitly selected budget failure."""
+        def execute(self, code, variables=None):
+            """Deliver selected child results before injecting an execution boundary failure."""
+            self.context = variables["context"]
             if code == THIRD_CHILD:
-                payload = await self.callback(
-                    {"op": "query_node", "node_id": "c", "question": "Find the date"}
-                )
-                result = REPLResult(json.dumps(payload), None, False, 1, ())
+                self.owner.codes.append(code)
+                payload = self.tools["query_node"](node_id="c", question="Find the date")
+                result = json.dumps(payload)
             else:
-                result = await super().execute(code)
+                result = super().execute(code, variables)
             if (exhaust_after or {}).get(self.context["node_id"]) == code:
                 raise BudgetExceeded("Replay continuation allowance exhausted after callback")
             return result
 
-    def create(context, *, config, node_callback):
-        """Retain each interpreter's independent context and cleanup status."""
-        session = ThirdNodeReplay(context, config=config, node_callback=node_callback, owner=owner)
+    def create():
+        """Return a separately owned CodeInterpreter for each recursive invocation."""
+        session = ThirdNodeReplay(owner)
         owner.sessions.append(session)
         return session
 
@@ -166,7 +172,13 @@ def runtime(models=None, evidence=None, factory=None, **options):
         factory or ReplayFactory(),
     )
     return (
-        NodeRuntime(models.main, models.reader, evidence, repl_factory=factory, **defaults),
+        NodeRuntime(
+            models.main,
+            models.reader,
+            evidence,
+            interpreter_factory=factory,
+            **defaults,
+        ),
         models,
         evidence,
         factory,
@@ -188,9 +200,9 @@ def test_all_seeds_contribute_to_one_main_without_raw_local_history():
         assert (
             "Long uncited local source sentinel" not in models.main_requests[0].messages[1].content
         )
-        initial = [request for request in models.child_requests if len(request.messages) == 2]
+        initial = [request for request in models.child_requests if step(request) == 0]
         assert all(
-            "Complete journal sentinel" in request.messages[1].content for request in initial
+            "Complete journal sentinel" in request.messages[0].content for request in initial
         )
         assert all(
             "Long uncited local source sentinel" not in request.messages[1].content
@@ -213,12 +225,9 @@ def test_all_seeds_contribute_to_one_main_without_raw_local_history():
         )
         assert discovery["references"] == [reference_to_dict(NodeRef("b"))]
         edge_observation = next(
-            json.loads(observation["stdout"])
+            observation(request)
             for request in models.child_requests
-            for message in request.messages
-            if message.role == "user"
-            and (observation := json.loads(message.content)).get("stdout")
-            and "edges" in json.loads(observation["stdout"])
+            if "edges" in observation(request)
         )
         assert edge_observation["edges"] == await evidence.edge_descriptions("a")
         assert evidence.reads
@@ -255,12 +264,12 @@ def test_three_seed_limit_two_queues_third_and_bounds_model_calls():
             engine.answer("Question", seeds=[NodeSeed(n) for n in ("a", "b", "c")])
         )
         await asyncio.wait_for(entered.wait(), 1)
-        assert set(factory.started) == {"a", "b"}
+        assert len(factory.started) == 2
         assert "c" not in evidence.initialized
         release.set()
         result = await asyncio.wait_for(task, 2)
         assert result.status == "completed"
-        assert peak == 2 and set(factory.started) == {"a", "b", "c"}
+        assert peak == 2 and len(factory.started) == 3
 
     asyncio.run(scenario())
 
@@ -270,37 +279,26 @@ def test_three_seeds_keep_finish_calls_and_finalize_instead_of_repeating_reads(l
     """Every admitted seed can select its local evidence before the shared allowance or last step ends."""
 
     async def scenario():
-        """Keep requesting reads until the native schema explicitly restricts the next response to finish."""
+        """Keep requesting reads until the shared budget or last action requires a submission."""
         models = Models()
         finish_requests = []
 
         async def investigate(request):
             """Obey finish-only admission while otherwise attempting another exploratory read."""
             models.child_requests.append(request)
-            context = json.loads(request.messages[1].content)
-            schema = request.output_schema["properties"]["operation"]
-            finish_only = schema.get("properties", {}).get("op", {}).get("enum") == ["finish"]
+            context = node_context(request)
+            assert set(request.output_schema["properties"]) == {"reasoning", "code"}
+            finish_only = json.loads(request.messages[-1].content)["budget"]["must_finish"]
             if finish_only:
                 finish_requests.append(context["node_id"])
-                observations = [
-                    json.loads(message.content)
-                    for message in request.messages
-                    if message.role == "user"
-                ]
-                payload = next(
-                    json.loads(observation["stdout"])
-                    for observation in reversed(observations)
-                    if observation.get("stdout")
-                )
-                operation = json.loads(
-                    finish(
+                payload = observation(request)
+                return ModelResponse(
+                    submit(
                         context["node_id"] + " local finding",
                         [record["id"] for record in payload["evidence"]],
                     )
                 )
-            else:
-                operation = {"op": "python", "code": READ}
-            return ModelResponse(json.dumps({"operation": operation}))
+            return ModelResponse(action(READ))
 
         models.reader = CallableModelClient(
             investigate, capabilities=ModelCapabilities(structured_output=True)
@@ -322,7 +320,7 @@ def test_three_seeds_keep_finish_calls_and_finalize_instead_of_repeating_reads(l
         assert len(models.child_requests) == 6 and len(models.main_requests) == 1
         assert result.usage["reader_calls"] == 6 and result.usage["model_calls"] == 7
         assert Counter(reference.node_id for reference in evidence.reads) == Counter("abc")
-        assert set(factory.started) == set("abc") and all(s.closed for s in factory.sessions)
+        assert len(factory.started) == 3 and all(s.closed for s in factory.sessions)
 
     asyncio.run(scenario())
 
@@ -342,7 +340,7 @@ def test_child_admission_preserves_parent_finish_when_two_child_calls_do_not_fit
         engine, models, _, factory = runtime(Models({"a": [CHILD]}), budget=budget)
         result = await engine.answer("Question", seeds=[NodeSeed("a")])
         assert result.status == "partial" and not result.references
-        assert factory.started == ["a"]
+        assert len(factory.started) == 1
         assert len(models.main_requests) == 1
         assert result.usage["reader_calls"] <= 3
         assert any("call" in gap.lower() for gap in result.evidence.unresolved)
@@ -364,10 +362,9 @@ def test_concurrency_one_still_allows_recursive_child():
         assert result.status == "completed"
         assert [session.context["node_id"] for session in factory.sessions] == ["a", "b"]
         child_context = next(
-            json.loads(request.messages[1].content)
+            node_context(request)
             for request in models.child_requests
-            if len(request.messages) == 2
-            and json.loads(request.messages[1].content)["node_id"] == "b"
+            if step(request) == 0 and node_context(request)["node_id"] == "b"
         )
         assert child_context["references"] == [reference_to_dict(SourceSpan("b", "turn", 0, 9))]
         assert "eu-west-1" not in json.dumps(child_context)
@@ -462,9 +459,9 @@ def test_parent_schema_error_does_not_activate_budget_preservation():
 
         async def invalid_finish(request):
             """Inject a protocol violation only after A receives the child's actual result."""
-            context = json.loads(request.messages[1].content)
-            if context["node_id"] == "a" and len(request.messages) > 2:
-                return ModelResponse(finish("Unsupported parent finding", ["not-visible"]))
+            context = node_context(request)
+            if context["node_id"] == "a" and step(request) > 0:
+                return ModelResponse(submit("Unsupported parent finding", ["not-visible"]))
             return await original(request)
 
         models.reader = CallableModelClient(invalid_finish)
@@ -492,15 +489,15 @@ def test_budget_preservation_respects_delivery_and_aggregate_return_limits(bound
         plans = {"a": [CHILD, THIRD_CHILD] if boundary == "aggregate_bundle" else [CHILD]}
         models = Models(plans)
         original = models.child
-        answer = "\\" * 1700 if boundary == "main_context" else "Child finding " * 40
+        answer = "\\" * 6000 if boundary == "main_context" else "Child finding " * 40
 
         async def long_findings(request):
             """Select actual child evidence while varying only the returned finding size."""
-            context = json.loads(request.messages[1].content)
-            if context["node_id"] != "a" and len(request.messages) > 2:
-                payload = json.loads(json.loads(request.messages[-1].content)["stdout"])
+            context = node_context(request)
+            if context["node_id"] != "a" and step(request) > 0:
+                payload = observation(request)
                 return ModelResponse(
-                    finish(answer, [record["id"] for record in payload["evidence"]])
+                    submit(answer, [record["id"] for record in payload["evidence"]])
                 )
             return await original(request)
 
@@ -511,15 +508,13 @@ def test_budget_preservation_respects_delivery_and_aggregate_return_limits(bound
         budget = Budget(
             max_model_calls=40,
             max_reader_calls=36,
-            max_context_tokens=8000 if boundary == "main_context" else 50000,
+            max_context_tokens=30000 if boundary == "main_context" else 50000,
             max_evidence_tokens=50000,
-            max_bundle_tokens=1000 if boundary == "aggregate_bundle" else 7000,
+            max_bundle_tokens=1000 if boundary == "aggregate_bundle" else 30000,
             max_output_tokens=1000,
         )
         config = (
-            DockerREPLConfig(max_response_bytes=512)
-            if boundary == "transport"
-            else DockerREPLConfig()
+            SandboxConfig(max_response_bytes=512) if boundary == "transport" else SandboxConfig()
         )
         engine, _, _, _ = runtime(models, factory=factory, budget=budget, repl_config=config)
         result = await engine.answer("Question", seeds=[NodeSeed("a")])
@@ -536,7 +531,12 @@ def test_budget_preservation_respects_delivery_and_aggregate_return_limits(bound
         ]
         if boundary == "transport":
             assert not delivered
-            assert any(event["kind"] == "node_operation_failed" for event in result.trace)
+            assert any(
+                event["kind"] == "branch_return"
+                and event["node_id"] == "b"
+                and event["status"] == "budget_exhausted"
+                for event in result.trace
+            )
         else:
             assert len(delivered) == (2 if boundary == "aggregate_bundle" else 1)
             assert any("omitt" in gap.lower() for gap in branch["unresolved"])
@@ -635,65 +635,6 @@ def test_main_presents_attributed_sources_before_findings_without_changing_evide
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("metadata_key", ["note", "date"])
-def test_main_reserves_the_expanded_attribution_presentation(metadata_key):
-    """Lifted source dates count toward main context even when the canonical branch fits its bundle."""
-
-    async def scenario():
-        """Keep the same metadata bytes, lifting them only when they are the source date."""
-        evidence, models, owner = EvidenceFixture(), Models(), ReplayFactory()
-        original = evidence.read_segments
-
-        async def attributed(reference):
-            """Return a short exact passage with large escaped source metadata."""
-            return [
-                replace(
-                    record, metadata={"role": "user", "source_metadata": {metadata_key: "\\" * 900}}
-                )
-                for record in await original(reference)
-            ]
-
-        class QuietReplay(ReplayREPL):
-            """Keep source metadata in Python and print only learned citation IDs."""
-
-            async def execute(self, code):
-                """Deliver a real read without using its full metadata as the reader observation."""
-                assert code == READ
-                payload = await self.callback(
-                    {"op": "read", "reference": self.context["references"][0]}
-                )
-                visible = {"evidence": [{"id": record["id"]} for record in payload["evidence"]]}
-                return REPLResult(json.dumps(visible), None, False, 1, ())
-
-        def create(context, *, config, node_callback):
-            """Inject the finite transport while preserving the runtime's actual callback admission."""
-            session = QuietReplay(context, config=config, node_callback=node_callback, owner=owner)
-            owner.sessions.append(session)
-            return session
-
-        evidence.read_segments = attributed
-        engine, _, _, _ = runtime(
-            models,
-            evidence,
-            create,
-            budget=Budget(max_context_tokens=10000, max_output_tokens=1000, max_bundle_tokens=7000),
-        )
-        result = await engine.answer("Region?", seeds=[NodeSeed("b")])
-        assert len(models.main_requests) == 1
-        request = models.main_requests[0]
-        assert RunLedger(engine.budget, len).context_size(request.messages) + 1000 <= 10000
-        if metadata_key == "date":
-            assert result.status == "partial" and not result.references
-            assert "synthesis allowance" in str(result.evidence.unresolved)
-            assert json.loads(request.messages[1].content)["evidence"] == []
-        else:
-            assert result.status == "completed"
-            assert result.references == (SourceSpan("b", "turn", 0, 9),)
-        assert all(session.closed for session in owner.sessions)
-
-    asyncio.run(scenario())
-
-
 @pytest.mark.parametrize("failure", ["later_segment", "read_transport", "child_transport"])
 def test_failed_callback_payload_does_not_make_registered_citations_visible(failure):
     """Guessed IDs from undelivered partial reads or oversized returns are never admissible citations."""
@@ -704,19 +645,19 @@ def test_failed_callback_payload_does_not_make_registered_citations_visible(fail
 
         async def child(request):
             """Guess the first registry ID after an error instead of learning it from delivered evidence."""
-            context = json.loads(request.messages[1].content)
-            if len(request.messages) == 2:
+            context = node_context(request)
+            if step(request) == 0:
                 code = CHILD if failure == "child_transport" and context["node_id"] == "a" else READ
-                return ModelResponse(json.dumps({"op": "python", "code": code}))
+                return ModelResponse(action(code))
             if failure == "child_transport" and context["node_id"] == "b":
-                observed = json.loads(json.loads(request.messages[-1].content)["stdout"])
+                observed = observation(request)
                 return ModelResponse(
-                    finish(
+                    submit(
                         "Detailed child findings " * 60,
                         [record["id"] for record in observed["evidence"]],
                     )
                 )
-            return ModelResponse(finish("Guessed hidden evidence", ["e1"]))
+            return ModelResponse(submit("Guessed hidden evidence", ["e1"]))
 
         models.reader = CallableModelClient(child)
         options = {}
@@ -738,7 +679,7 @@ def test_failed_callback_payload_does_not_make_registered_citations_visible(fail
                 max_bundle_tokens=6000,
             )
         else:
-            options["repl_config"] = DockerREPLConfig(max_response_bytes=512)
+            options["repl_config"] = SandboxConfig(max_response_bytes=512)
             if failure == "read_transport":
                 evidence.sources["b"] = "source sentinel " * 80
         engine, _, _, _ = runtime(models, evidence, **options)
@@ -749,7 +690,13 @@ def test_failed_callback_payload_does_not_make_registered_citations_visible(fail
         assert not result.references
         assert "Citation was not accessed" in str(result.evidence.unresolved)
         assert any(
-            event["kind"] == "node_operation_failed" and event["error_type"] == "BudgetExceeded"
+            (event["kind"] == "node_operation_failed" and event["error_type"] == "BudgetExceeded")
+            or (
+                failure == "child_transport"
+                and event["kind"] == "branch_return"
+                and event["node_id"] == "b"
+                and event["status"] == "budget_exhausted"
+            )
             for event in result.trace
         )
         assert all(not branch["evidence"] for branch in engine.last_branches)
@@ -768,14 +715,14 @@ def test_failed_branch_keeps_successful_findings_and_cannot_be_hidden_by_main():
 
         async def child(request):
             """Inject a known provider failure into only node A."""
-            if json.loads(request.messages[1].content)["node_id"] == "a":
+            if node_context(request)["node_id"] == "a":
                 raise ProviderError("deliberate branch failure")
             return await original(request)
 
         async def main(request):
             """Return the good citation without volunteering the failed branch's gap."""
             models.main_requests.append(request)
-            records = json.loads(request.messages[1].content)["evidence"]
+            records = node_context(request)["evidence"]
             return ModelResponse(
                 finish("Only supported findings", [record["id"] for record in records])
             )
@@ -822,17 +769,17 @@ def test_main_can_resolve_a_local_missing_fact_from_another_seed():
 
         async def local(request):
             """Report a local limitation only after actually inspecting A's source."""
-            context = json.loads(request.messages[1].content)
-            if context["node_id"] == "a" and len(request.messages) > 2:
+            context = node_context(request)
+            if context["node_id"] == "a" and step(request) > 0:
                 return ModelResponse(
-                    finish("No region in this node", [], ["This node has no region."])
+                    submit("No region in this node", [], ["This node has no region."])
                 )
             return await original(request)
 
         async def synthesize(request):
             """Use B's evidence and explicitly resolve the irrelevant local absence in A."""
             models.main_requests.append(request)
-            branches = json.loads(request.messages[1].content)["branches"]
+            branches = node_context(request)["branches"]
             selected = next(branch for branch in branches if branch["node_id"] == "b")
             return ModelResponse(finish("eu-west-1", selected["citations"]))
 
@@ -867,7 +814,7 @@ def test_journal_gap_is_attributed_and_cannot_be_hidden_by_final_main():
         async def synthesize(request):
             """Deliberately omit the mandatory gap from otherwise valid cited synthesis."""
             models.main_requests.append(request)
-            evidence = json.loads(request.messages[1].content)["evidence"]
+            evidence = node_context(request)["evidence"]
             return ModelResponse(
                 finish(
                     "eu-west-1",
@@ -899,11 +846,11 @@ def test_failed_child_gap_reaches_main_when_parent_and_main_omit_it():
 
         async def child(request):
             """Fail B and deliberately suppress its operational gap in A's model-selected findings."""
-            context = json.loads(request.messages[1].content)
+            context = node_context(request)
             if context["node_id"] == "b":
                 raise ProviderError("Child provider unavailable")
-            if len(request.messages) > 2:
-                return ModelResponse(finish("Unknown from this investigation"))
+            if step(request) > 0:
+                return ModelResponse(submit("Unknown from this investigation"))
             return await original(request)
 
         async def main(request):
@@ -936,8 +883,8 @@ def test_empty_answer_with_explicit_abstention_is_valid_after_inspection(native_
 
         async def abstain(request):
             """Inspect first, then explain why no supported answer is available."""
-            if len(request.messages) > 2:
-                return ModelResponse(finish("", [], ["No requested fact in this source"]))
+            if step(request) > 0:
+                return ModelResponse(submit("", [], ["No requested fact in this source"]))
             return await original(request)
 
         async def main(request):
@@ -985,7 +932,7 @@ def test_native_main_schema_admits_only_selected_branch_evidence_ids():
         assert {reference.node_id for reference in result.references} == {"b"}
         assert len(models.main_requests) == 1
         request = models.main_requests[0]
-        branch = json.loads(request.messages[1].content)["branches"][0]
+        branch = node_context(request)["branches"][0]
         identifiers = branch["citations"]
         assert request.output_schema["properties"]["citations"]["items"] == {
             "type": "string",
@@ -1016,20 +963,16 @@ def test_native_main_citation_schema_keeps_host_visibility_validation(invalid_ci
         async def wrong_citation(request):
             """Return an identifier outside the main schema while retaining the actual request."""
             models.main_requests.append(request)
-            branch = json.loads(request.messages[1].content)["branches"][0]
+            branch = node_context(request)["branches"][0]
             if invalid_citation == "node_id":
                 citation = branch["node_id"]
             else:
                 records = [
                     record
                     for child_request in models.child_requests
-                    for message in child_request.messages
-                    if message.role == "user"
-                    for observation in [json.loads(message.content)]
-                    if observation.get("stdout")
-                    for record in json.loads(observation["stdout"]).get("evidence", [])
-                    if record["references"][0]["node_id"] == "a"
+                    for record in observation(child_request).get("evidence", [])
                 ]
+
                 citation = records[0]["id"]
             assert citation not in request.output_schema["properties"]["citations"]["items"]["enum"]
             return ModelResponse(finish("eu-west-1", [citation]))
@@ -1071,7 +1014,7 @@ def test_native_citation_schema_growth_is_reserved_before_branch_return():
         assert len(models.main_requests) == 1
         request = models.main_requests[0]
         assert request.output_schema["properties"]["citations"]["maxItems"] == 0
-        assert json.loads(request.messages[1].content)["evidence"] == []
+        assert node_context(request)["evidence"] == []
         ledger = RunLedger(engine.budget, counter)
         assert (
             ledger.context_size(request.messages, output_schema=request.output_schema)
@@ -1096,14 +1039,14 @@ def test_premature_finish_receives_a_corrective_observation_then_reads():
             calls += 1
             models.child_requests.append(request)
             if calls == 1:
-                return ModelResponse(finish("Unavailable", [], ["Source result was not supplied"]))
+                return ModelResponse(submit("Unavailable", [], ["Source result was not supplied"]))
             if calls == 2:
-                observation = json.loads(request.messages[-1].content)
-                assert observation.get("error") or observation.get("instruction")
-                return ModelResponse(json.dumps({"op": "python", "code": READ}))
-            observation = json.loads(json.loads(request.messages[-1].content)["stdout"])
+                feedback = history(request)
+                assert "Source text has not been inspected" in feedback
+                return ModelResponse(action(READ))
+            payload = observation(request)
             return ModelResponse(
-                finish("eu-west-1", [record["id"] for record in observation["evidence"]])
+                submit("eu-west-1", [record["id"] for record in payload["evidence"]])
             )
 
         models.reader = CallableModelClient(premature)
@@ -1240,21 +1183,37 @@ def test_programming_error_and_cancellation_propagate_after_all_cleanup():
         with pytest.raises(RuntimeError, match="programming bug"):
             await engine.answer("Question", seeds=[NodeSeed("a"), NodeSeed("b")])
         assert all(session.closed for session in factory.sessions)
-        entered = asyncio.Event()
+        entered, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        provider_closed = False
+        models = Models({"a": [CHILD]})
 
         async def slow(request):
-            """Block model work until the owning answer is cancelled."""
+            """Delay a nested provider's cleanup until repeated parent cancellation arrives."""
+            nonlocal provider_closed
+            if node_context(request)["node_id"] != "b":
+                return await models.child(request)
             entered.set()
-            await asyncio.Event().wait()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleaning.set()
+                await release.wait()
+                provider_closed = True
 
-        engine, _, _, factory = runtime()
-        engine.reader_model = CallableModelClient(slow)
-        task = asyncio.create_task(engine.answer("Question", seeds=[NodeSeed("a"), NodeSeed("b")]))
-        await entered.wait()
+        models.reader = CallableModelClient(slow)
+        engine, _, _, factory = runtime(models)
+        task = asyncio.create_task(engine.answer("Question", seeds=[NodeSeed("a"), NodeSeed("c")]))
+        await asyncio.wait_for(entered.wait(), 2)
         task.cancel()
+        await asyncio.wait_for(cleaning.wait(), 2)
+        task.cancel()
+        await asyncio.sleep(0.03)
+        assert not task.done()
+        release.set()
         with pytest.raises(asyncio.CancelledError):
-            await task
-        assert all(session.closed for session in factory.sessions)
+            await asyncio.wait_for(task, 2)
+        assert provider_closed and all(session.closed for session in factory.sessions)
+        assert any(event.get("depth") == 1 for event in engine.last_trace)
         assert any(event.get("status") == "cancelled" for event in engine.last_trace)
 
     asyncio.run(scenario())
@@ -1297,7 +1256,69 @@ def test_final_operation_is_reserved_after_later_branch_exhaustion():
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("source", ["\\" * 2500, "🧭" * 1600], ids=["escaped", "utf8"])
+@pytest.mark.parametrize("metadata_key", ["note", "date"])
+def test_main_reserves_the_expanded_attribution_presentation(metadata_key):
+    """Lifted source dates count toward main context even when the canonical branch fits its bundle."""
+
+    async def scenario():
+        """Keep the same metadata bytes, lifting them only when they are the source date."""
+        evidence, models, owner = EvidenceFixture(), Models(), ReplayFactory()
+        original = evidence.read_segments
+
+        async def attributed(reference):
+            """Return a short exact passage with large escaped source metadata."""
+            return [
+                replace(
+                    record,
+                    metadata={"role": "user", "source_metadata": {metadata_key: "\\" * 2800}},
+                )
+                for record in await original(reference)
+            ]
+
+        class QuietReplay(ReplayREPL):
+            """Keep source metadata in Python and print only learned citation IDs."""
+
+            def execute(self, code, variables=None):
+                """Deliver a real read without using its full metadata as the reader observation."""
+                if code != READ:
+                    return super().execute(code, variables)
+                self.context = variables["context"]
+                payload = self.tools["read"](reference=self.context["references"][0])
+                visible = {"evidence": [{"id": record["id"]} for record in payload["evidence"]]}
+                return json.dumps(visible)
+
+        def create():
+            """Inject the finite transport while preserving the runtime's actual callback admission."""
+            session = QuietReplay(owner)
+            owner.sessions.append(session)
+            return session
+
+        evidence.read_segments = attributed
+        engine, _, _, _ = runtime(
+            models,
+            evidence,
+            create,
+            budget=Budget(
+                max_context_tokens=22000, max_output_tokens=1000, max_bundle_tokens=15000
+            ),
+        )
+        result = await engine.answer("Region?", seeds=[NodeSeed("b")])
+        assert len(models.main_requests) == 1
+        request = models.main_requests[0]
+        assert RunLedger(engine.budget, len).context_size(request.messages) + 1000 <= 22000
+        if metadata_key == "date":
+            assert result.status == "partial" and not result.references
+            assert "synthesis allowance" in str(result.evidence.unresolved)
+            assert node_context(request)["evidence"] == []
+        else:
+            assert result.status == "completed"
+            assert result.references == (SourceSpan("b", "turn", 0, 9),)
+        assert all(session.closed for session in owner.sessions)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("source", ["\\" * 6000, "🧭" * 5000], ids=["escaped", "utf8"])
 def test_oversized_serialized_seed_return_leaves_final_main_context(source):
     """Escaping and UTF-8 accounting cannot turn an admitted branch into an oversized final prompt."""
 
@@ -1309,20 +1330,18 @@ def test_oversized_serialized_seed_return_leaves_final_main_context(source):
         class QuietReplay(ReplayREPL):
             """Replay a read whose full text stays external to model messages."""
 
-            async def execute(self, code):
+            def execute(self, code, variables=None):
                 """Deliver the evidence to the interpreter but print only its learned citation IDs."""
-                assert code == READ
-                payload = await self.callback(
-                    {"op": "read", "reference": self.context["references"][0]}
-                )
+                if code != READ:
+                    return super().execute(code, variables)
+                self.context = variables["context"]
+                payload = self.tools["read"](reference=self.context["references"][0])
                 observation = {"evidence": [{"id": record["id"]} for record in payload["evidence"]]}
-                return REPLResult(json.dumps(observation), None, False, 1, ())
+                return json.dumps(observation)
 
-        def create(context, *, config, node_callback):
+        def create():
             """Use an explicit no-execution replay session for the hidden-source scenario."""
-            session = QuietReplay(
-                context, config=config, node_callback=node_callback, owner=factory
-            )
+            session = QuietReplay(factory)
             factory.sessions.append(session)
             return session
 
@@ -1331,13 +1350,13 @@ def test_oversized_serialized_seed_return_leaves_final_main_context(source):
             models.reader,
             evidence,
             budget=Budget(
-                max_context_tokens=8000,
+                max_context_tokens=22000,
                 max_output_tokens=1000,
-                max_bundle_tokens=7000,
-                max_evidence_tokens=16000,
+                max_bundle_tokens=21000,
+                max_evidence_tokens=40000,
             ),
             token_counter=lambda text: len(text.encode("utf-8")),
-            repl_factory=create,
+            interpreter_factory=create,
         )
         result = await engine.answer("Question", seeds=[NodeSeed("b")])
         assert result.status == "partial"
@@ -1385,28 +1404,23 @@ def test_source_info_allows_small_read_without_loading_huge_node(with_passage):
         class MetadataReplay(ReplayREPL):
             """Replay two declared metadata/read commands without evaluating Python."""
 
-            async def execute(self, code):
+            def execute(self, code, variables=None):
                 """Use the returned address to request a source slice through the real callback."""
+                self.context = variables["context"]
                 if code == info_code:
-                    payload = await self.callback(
-                        {"op": "source_info", "node_id": None, "offset": 0, "limit": 1}
-                    )
+                    payload = self.tools["source_info"](node_id=None, offset=0, limit=1)
                     self.address = payload["turns"][0]["reference"]
                 elif code == slice_code:
-                    payload = await self.callback(
-                        {"op": "read", "reference": {**self.address, "end": 9}}
-                    )
+                    payload = self.tools["read"](reference={**self.address, "end": 9})
                 else:
-                    raise AssertionError("Unknown replay command")
-                return REPLResult(json.dumps(payload), None, False, 1, ())
+                    return super().execute(code, variables)
+                return json.dumps(payload)
 
         factory = ReplayFactory()
 
-        def create(context, *, config, node_callback):
+        def create():
             """Inject metadata transport only for this explicit deterministic test."""
-            session = MetadataReplay(
-                context, config=config, node_callback=node_callback, owner=factory
-            )
+            session = MetadataReplay(factory)
             factory.sessions.append(session)
             return session
 
@@ -1414,14 +1428,14 @@ def test_source_info_allows_small_read_without_loading_huge_node(with_passage):
             max_model_calls=5,
             max_reader_calls=4,
             max_evidence_tokens=5000,
-            max_context_tokens=16000,
+            max_context_tokens=24000,
         )
         models = Models({"b": [info_code, slice_code]})
         engine = NodeRuntime(
             models.main,
             models.reader,
             evidence,
-            repl_factory=create,
+            interpreter_factory=create,
             budget=budget,
             token_counter=len,
         )
@@ -1437,5 +1451,129 @@ def test_source_info_allows_small_read_without_loading_huge_node(with_passage):
             models.main_requests
         )
         assert result.usage["evidence_accounting_units"] < 5000
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("reader_calls", [1, 2])
+def test_dspy_extraction_cannot_spend_the_reserved_main_call(reader_calls):
+    """DSPy's extra extraction passes the same reader admission check as an action."""
+
+    async def scenario():
+        """Read once, then either admit extraction or preserve the single final main call."""
+        models = Models()
+
+        async def reader(request):
+            """Answer the actual action and extraction signatures with finite fixtures."""
+            models.child_requests.append(request)
+            if step(request) == 0:
+                return ModelResponse(action(READ))
+            return ModelResponse(
+                json.dumps(
+                    {
+                        "answer": "Selected region",
+                        "citations": [record["id"] for record in observation(request)["evidence"]],
+                        "unresolved": [],
+                    }
+                )
+            )
+
+        models.reader = CallableModelClient(reader)
+        engine, _, _, factory = runtime(
+            models,
+            max_steps=1,
+            budget=Budget(
+                max_model_calls=reader_calls + 1,
+                max_reader_calls=reader_calls,
+                max_context_tokens=50000,
+                max_evidence_tokens=50000,
+                max_bundle_tokens=12000,
+            ),
+        )
+        result = await engine.answer("Region?", seeds=[NodeSeed("b")])
+        assert len(models.child_requests) == reader_calls and len(models.main_requests) == 1
+        assert result.usage["model_calls"] == reader_calls + 1
+        assert result.status == ("completed" if reader_calls == 2 else "partial")
+        assert bool(result.references) == (reader_calls == 2)
+        assert all(session.closed for session in factory.sessions)
+
+    asyncio.run(scenario())
+
+
+def test_old_node_json_protocol_is_not_a_production_fallback():
+    """A reader must produce DSPy's action fields, with no hidden custom RLM controller."""
+
+    async def scenario():
+        """Reject a former python operation before any generated code executes."""
+        engine, models, _, factory = runtime()
+
+        async def legacy(request):
+            """Return the old operation format from an otherwise valid async model."""
+            return ModelResponse(json.dumps({"op": "python", "code": READ}))
+
+        engine.reader_model = CallableModelClient(legacy)
+        result = await engine.answer("Region?", seeds=[NodeSeed("b")])
+        assert result.status == "partial" and not factory.codes and not result.references
+        assert engine.last_branches[0]["status"] == "failed"
+        assert "Invalid DSPy reader output" in str(result.evidence.unresolved)
+        assert len(models.main_requests) == 1 and all(
+            session.closed for session in factory.sessions
+        )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("batched", [False, True])
+def test_dspy_plain_queries_share_admission_and_preserve_final_calls(batched):
+    """Built-in DSPy queries share reader limits and cannot spend node or main return calls."""
+
+    async def scenario():
+        """Admit one plain query, reject its peer and still submit canonical evidence."""
+        owner = ReplayFactory()
+        models = Models({"b": ["plain queries"]})
+        subqueries = []
+
+        class QueryReplay(ReplayREPL):
+            """Exercise DSPy's actual injected query tools through a finite action."""
+
+            def execute(self, code, variables=None):
+                """Make two plain calls while only one exploration call remains."""
+                if code != "plain queries":
+                    return super().execute(code, variables)
+                if batched:
+                    with pytest.raises(BudgetExceeded):
+                        self.tools["llm_query_batched"](["first", "second"])
+                else:
+                    assert self.tools["llm_query"]("first") == "plain response"
+                    with pytest.raises(BudgetExceeded):
+                        self.tools["llm_query"]("second")
+                return super().execute(READ, variables)
+
+        def create():
+            """Bind independent tools and cleanup state to one node interpreter."""
+            session = QueryReplay(owner)
+            owner.sessions.append(session)
+            return session
+
+        async def reader(request):
+            """Answer plain subqueries separately from DSPy action generation."""
+            if request.messages[0].content in {"first", "second"}:
+                subqueries.append(request)
+                return ModelResponse("plain response")
+            return await models.child(request)
+
+        engine = NodeRuntime(
+            models.main,
+            CallableModelClient(reader),
+            EvidenceFixture(),
+            interpreter_factory=create,
+            budget=Budget(max_model_calls=4, max_reader_calls=3, max_context_tokens=50000),
+        )
+        result = await engine.answer("Region?", seeds=[NodeSeed("b")])
+        assert result.status == "completed"
+        assert {ref.node_id for ref in result.references} == {"b"}
+        assert len(subqueries) == 1 and len(models.main_requests) == 1
+        assert result.usage["reader_calls"] == 3 and result.usage["model_calls"] == 4
+        assert all(session.closed for session in owner.sessions)
 
     asyncio.run(scenario())

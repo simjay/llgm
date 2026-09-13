@@ -12,7 +12,7 @@ def test_ask_cli_forwards_scope_time_and_returns_canonical_evidence(tmp_path, ca
     from contextlib import asynccontextmanager
 
     from llgm import LLGM, Conversation, Workspace
-    from tests.node_support import Models, ReplayFactory
+    from tests.node_support import Models, ReplayFactory, node_context
 
     received = []
 
@@ -27,7 +27,7 @@ def test_ask_cli_forwards_scope_time_and_returns_canonical_evidence(tmp_path, ca
                 models.main,
                 models.reader,
                 graph_model=models.reader,
-                repl_factory=ReplayFactory(),
+                interpreter_factory=ReplayFactory(),
             )
             await app.ingest(
                 Conversation.from_turns(
@@ -61,7 +61,7 @@ def test_ask_cli_forwards_scope_time_and_returns_canonical_evidence(tmp_path, ca
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "completed"
     assert result["references"][0]["node_id"] == "n"
-    initial = json.loads(received[1].child_requests[0].messages[1].content)
+    initial = node_context(received[1].child_requests[0])
     assert initial["query_scope"] == {"env": "production"}
     assert initial["journal"]["as_of_ms"] == 0
     assert initial["query_date"] == "original date"
@@ -106,7 +106,7 @@ def test_ask_cli_loads_explicit_env_file_before_settings(tmp_path, capsys, monke
     received = []
 
     async def answer(question, **kwargs):
-        """Return a completed synthetic answer without model or Docker execution."""
+        """Return a completed synthetic answer without model or sandbox execution."""
         return SimpleNamespace(
             answer="synthetic-answer",
             status="completed",
@@ -187,3 +187,81 @@ def test_ask_cli_env_file_errors_are_explicit_and_precede_resources(
     assert ("line 2" in output.err) is explicit
     assert "synthetic-private-value" not in output.err
     assert os.environ == {}
+
+
+def test_view_cli_rejects_missing_workspace_without_creating_it(tmp_path, capsys, monkeypatch):
+    """A typo in the workspace path cannot silently create a new empty graph."""
+    import os
+
+    monkeypatch.setattr(os, "environ", {})
+    missing = tmp_path / "absent"
+    assert main(["view", "--workspace", str(missing), "--no-browser"]) == 2
+    assert "Workspace does not exist" in capsys.readouterr().err
+    assert not missing.exists()
+
+
+def test_view_cli_rejects_custom_backend_instead_of_falling_back(tmp_path, capsys, monkeypatch):
+    """The CLI directs custom search users to their application's evidence factory."""
+    import os
+
+    monkeypatch.setattr(os, "environ", {"LLGM_RETRIEVER_BACKEND": "custom"})
+    assert main(["view", "--workspace", str(tmp_path), "--no-browser"]) == 2
+    assert "GraphViewer.from_application" in capsys.readouterr().err
+
+
+def test_view_cli_uses_storage_without_models(tmp_path, capsys, monkeypatch):
+    """The command forwards viewer settings without constructing application model clients."""
+    import asyncio
+    import os
+
+    from llgm import LLGM, Workspace
+    from llgm.viewer import GraphViewer
+
+    monkeypatch.setattr(os, "environ", {})
+
+    async def initialize():
+        """Create a genuine empty workspace before exercising the command."""
+        async with Workspace.open(tmp_path):
+            pass
+
+    asyncio.run(initialize())
+    received = []
+
+    async def enter(viewer):
+        """Replace only the listening socket while recording real CLI configuration."""
+        received.append((viewer.workspace.database_path, viewer.conversation_id, viewer.port))
+        viewer.url = "http://127.0.0.1:8765/test/"
+        return viewer
+
+    async def exit_viewer(viewer, *args):
+        """Finish the no-socket viewer context."""
+
+    async def serve(viewer):
+        """Return immediately after verifying that an entered viewer is served."""
+        assert viewer.url
+
+    def no_models(*args, **kwargs):
+        """Fail if viewing a workspace tries to allocate answer-model clients."""
+        raise AssertionError("Viewer allocated models")
+
+    monkeypatch.setattr(GraphViewer, "__aenter__", enter)
+    monkeypatch.setattr(GraphViewer, "__aexit__", exit_viewer)
+    monkeypatch.setattr(GraphViewer, "serve_forever", serve)
+    monkeypatch.setattr(LLGM, "from_settings", no_models)
+    assert (
+        main(
+            [
+                "view",
+                "--workspace",
+                str(tmp_path),
+                "--conversation-id",
+                "atlas",
+                "--port",
+                "0",
+                "--no-browser",
+            ]
+        )
+        == 0
+    )
+    assert received == [(str(tmp_path / "metadata.sqlite3"), "atlas", 0)]
+    assert "http://127.0.0.1:8765/test/" in capsys.readouterr().out

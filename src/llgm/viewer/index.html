@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LLGM · Graph explorer</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="style.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="./" aria-label="LLGM graph explorer"
+        ><span class="mark">↳</span> LLGM
+        <span class="brand-label">/ graph explorer</span></a
+      >
+      <form id="search-form" role="search">
+        <label class="sr-only" for="search">Search memory</label
+        ><span aria-hidden="true">⌕</span
+        ><input
+          id="search"
+          type="search"
+          placeholder="Search your memory…"
+          autocomplete="off"
+          maxlength="4096"
+        /><button type="submit">Search</button>
+      </form>
+      <span class="local-badge"><i></i> LOCAL WORKSPACE</span>
+    </header>
+    <div class="toolbar">
+      <div>
+        <span class="eyebrow">CONVERSATION</span
+        ><select id="conversation" aria-label="Conversation"></select>
+      </div>
+      <div class="toolbar-right">
+        <span id="current-label">Loading current topic…</span
+        ><button id="current-button">Go to current</button
+        ><button id="refresh" aria-label="Refresh workspace">↻ Refresh</button>
+      </div>
+    </div>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <main>
+      <aside class="explorer">
+        <div class="section-heading">
+          <h2>Workspace</h2>
+          <span id="node-count" class="count">0</span>
+        </div>
+        <div class="folder-heading">
+          <span>▾</span> Nodes <span class="subtle">/</span>
+        </div>
+        <div id="node-list"></div>
+        <div class="explorer-foot">
+          Select a node to explore its turns,<br />journal entries, and source
+          files.
+        </div>
+      </aside>
+      <section class="graph-pane" aria-label="Graph visualization">
+        <div class="graph-caption">
+          <span class="eyebrow">MEMORY MAP</span>
+          <h1>Your connected context</h1>
+          <p id="graph-summary">Loading workspace…</p>
+        </div>
+        <svg
+          id="graph"
+          role="group"
+          aria-label="Topic nodes and directed connections"
+        >
+          <defs>
+            <marker
+              id="arrow"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z"></path>
+            </marker>
+          </defs>
+          <g id="world">
+            <g id="edges"></g>
+            <g id="nodes"></g>
+          </g>
+        </svg>
+        <div id="empty-graph" hidden>
+          <h2>A place for your memory</h2>
+          <p>
+            This workspace has no nodes yet.<br />Use LLGM to start a
+            conversation, then refresh.
+          </p>
+        </div>
+        <div class="graph-footer">
+          <div class="legend">
+            <span><i class="dot current"></i> Current topic</span
+            ><span><i class="dot match"></i> Search match</span
+            ><span><i class="dot ordinary"></i> Node</span>
+          </div>
+          <div class="zoom">
+            <button id="zoom-out" aria-label="Zoom out">−</button
+            ><button id="fit">Fit graph</button
+            ><button id="zoom-in" aria-label="Zoom in">+</button>
+          </div>
+        </div>
+        <div class="graph-hint">
+          Drag nodes to arrange · Scroll to zoom · Drag canvas to pan
+        </div>
+      </section>
+      <aside class="details">
+        <section id="results" hidden>
+          <div class="section-heading">
+            <h2>Search results</h2>
+            <button id="clear-search" aria-label="Clear search results">
+              ✕
+            </button>
+          </div>
+          <p id="search-summary"></p>
+          <div id="result-list"></div>
+        </section>
+        <section id="inspector">
+          <div class="inspector-empty">
+            <span class="empty-icon">⌘</span>
+            <h2>Follow a connection</h2>
+            <p>
+              Open a node on the map or in the workspace to inspect its original
+              evidence.
+            </p>
+          </div>
+        </section>
+      </aside>
+    </main>
+    <footer>
+      <span id="database">Opening workspace</span
+      ><span
+        >Read-only inspection <span class="footer-divider">/</span>
+        <span id="updated">Live view · refreshes every 5s</span></span
+      >
+    </footer>
+  </body>
+</html>

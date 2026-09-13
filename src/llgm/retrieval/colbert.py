@@ -26,14 +26,15 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from llgm.core.errors import CapabilityError, ConfigurationError
-from llgm.retrieval.base import SearchHit, SearchPassage, corpus_fingerprint
+from llgm.retrieval._colbert import OFFICIAL_REPOSITORY, ranked_hits, snapshot_passages
+from llgm.retrieval.base import SearchHit, SearchPassage, check_passages, corpus_fingerprint
 
-_OFFICIAL_REPOSITORY = "https://github.com/stanford-futuredata/ColBERT"
 _MANIFEST_NAME = "llgm-manifest.json"
 # Upstream Run is a process-wide singleton. Serialize our uses of it, and do
 # not allow concurrent search to mutate the upstream search configuration.
@@ -169,7 +170,7 @@ def _official_url(url: str) -> bool:
     """Recognize the supported URL forms of the official ColBERT repository."""
     normalized = url.removesuffix(".git").rstrip("/").lower()
     return normalized in {
-        _OFFICIAL_REPOSITORY.lower(),
+        OFFICIAL_REPOSITORY.lower(),
         "git@github.com:stanford-futuredata/colbert",
         "ssh://git@github.com/stanford-futuredata/colbert",
     }
@@ -201,7 +202,7 @@ def _check_repository_revision(revision: str) -> dict[str, str]:
         if _git(package_dir, "status", "--porcelain", "--untracked-files=no") != "":
             raise ConfigurationError("The pinned ColBERT checkout has tracked modifications")
         return {
-            "repository": _OFFICIAL_REPOSITORY,
+            "repository": OFFICIAL_REPOSITORY,
             "revision": actual_revision,
             "verification": "git",
         }
@@ -226,7 +227,7 @@ def _check_repository_revision(revision: str) -> dict[str, str]:
                     "Installed ColBERT VCS revision does not match the configured pin"
                 )
             return {
-                "repository": _OFFICIAL_REPOSITORY,
+                "repository": OFFICIAL_REPOSITORY,
                 "revision": actual_revision,
                 "verification": "pep610",
             }
@@ -325,7 +326,11 @@ def preflight_colbert(config: ColBERTConfig) -> list[str]:
 
 
 class ColBERTRetriever:
-    """An explicitly built/opened official PLAID retriever over fixed passages."""
+    """An explicitly built/opened official PLAID retriever over a canonical corpus.
+
+    Returned passages retain the indexed text and references. Their metadata is
+    copied so callers cannot change later hits or the recorded corpus identity.
+    """
 
     def __init__(
         self,
@@ -339,14 +344,19 @@ class ColBERTRetriever:
     ) -> None:
         """Bind a verified passage corpus to an initialized official searcher."""
         self.config = config
-        self.passages = passages
+        self._passages = snapshot_passages(passages)
+        self._by_pid = dict(enumerate(self._passages))
+        self._fingerprint = corpus_fingerprint(self._passages)
         self.tokenizer = tokenizer
         self._searcher = searcher
         self._repository = repository
         self._build_seconds = build_seconds
-        self._search_calls = 0
-        self._search_seconds = 0.0
         self.events: list[dict[str, Any]] = []
+
+    @property
+    def passages(self) -> tuple[SearchPassage, ...]:
+        """Return canonical passages without exposing the index's owned metadata."""
+        return deepcopy(self._passages)
 
     @classmethod
     def build(
@@ -380,15 +390,13 @@ class ColBERTRetriever:
         """Validate provenance and corpus identity before building or opening PLAID."""
         if not passages:
             raise ConfigurationError("ColBERT cannot index an empty collection")
-        ids = [passage.passage_id for passage in passages]
-        if len(ids) != len(set(ids)):
-            raise ConfigurationError("ColBERT passage IDs must be unique")
+        check_passages(passages)
         index_path = config.index_path
         manifest_path = index_path / _MANIFEST_NAME
         identity = {
             "schema_version": 1,
             "corpus_fingerprint": corpus_fingerprint(passages),
-            "passage_ids_in_pid_order": ids,
+            "passage_ids_in_pid_order": [passage.passage_id for passage in passages],
             "checkpoint_sha256": config.checkpoint_sha256.lower(),
             "repository_revision": config.repository_revision.lower(),
             "doc_maxlen": config.doc_maxlen,
@@ -577,7 +585,6 @@ class ColBERTRetriever:
                 self.config.query_maxlen,
             )
             started = time.perf_counter()
-            self._search_calls += 1
             event: dict[str, Any] = {
                 "operation": "colbert_plaid_search",
                 "query_sha256": hashlib.sha256(query.encode("utf-8")).hexdigest(),
@@ -587,19 +594,19 @@ class ColBERTRetriever:
                 "status": "failed",
             }
             try:
-                pids, _ranks, scores = self._searcher.search(query, k=k, full_length_search=False)
-                if len(pids) != len(scores):
+                pids, ranks, scores = self._searcher.search(query, k=k, full_length_search=False)
+                if not len(pids) == len(ranks) == len(scores):
                     raise CapabilityError(
-                        "Official ColBERT returned mismatched passage IDs and scores"
+                        "Official ColBERT returned mismatched passage IDs, ranks and scores"
                     )
-                hits: list[SearchHit] = []
-                for rank, (pid, score) in enumerate(zip(pids, scores), start=1):
-                    pid, score = int(pid), float(score)
-                    if not 0 <= pid < len(self.passages) or not math.isfinite(score):
-                        raise CapabilityError(
-                            "Official ColBERT returned an invalid passage ID or score"
-                        )
-                    hits.append(SearchHit(passage=self.passages[pid], score=score, rank=rank))
+                hits = ranked_hits(
+                    [
+                        {"passage_id": pid, "rank": rank, "score": score}
+                        for pid, rank, score in zip(pids, ranks, scores)
+                    ],
+                    self._by_pid,
+                    k,
+                )
                 event.update(returned=len(hits), status="succeeded")
                 return hits
             except CapabilityError:
@@ -608,7 +615,6 @@ class ColBERTRetriever:
                 raise CapabilityError(f"Official ColBERTv2/PLAID search failed: {exc}") from exc
             finally:
                 event["elapsed_seconds"] = time.perf_counter() - started
-                self._search_seconds += event["elapsed_seconds"]
                 self.events.append(event)
 
     def descriptor(self) -> dict[str, Any]:
@@ -624,14 +630,14 @@ class ColBERTRetriever:
             "implementation": dict(self._repository),
             "configuration": configuration,
             "checkpoint_digest_kind": "sha256-sorted-relative-path-and-file-sha256-json-v1",
-            "corpus_fingerprint": corpus_fingerprint(self.passages),
-            "passage_count": len(self.passages),
+            "corpus_fingerprint": self._fingerprint,
+            "passage_count": len(self._passages),
             "index_path": str(self.config.index_path),
             "token_limits_include_special_and_marker_tokens": True,
             "silent_truncation": False,
             "build_seconds": self._build_seconds,
-            "search_calls": self._search_calls,
-            "search_seconds": self._search_seconds,
+            "search_calls": len(self.events),
+            "search_seconds": sum(event["elapsed_seconds"] for event in self.events),
             "tokenizer": self.tokenizer.descriptor()
             if hasattr(self.tokenizer, "descriptor")
             else None,

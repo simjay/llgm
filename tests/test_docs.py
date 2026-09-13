@@ -56,10 +56,6 @@ def rendered_docs(tmp_path):
         "llgm.Evidence.read",
         "llgm.retrieval.base.Embedder.embed",
         "llgm.storage.BlobStore.get",
-        "llgm.inference.recursive.RecursiveRuntime",
-        "llgm.inference.recursive.RecursiveRuntime.answer",
-        "llgm.inference.rlm.RLMRuntime",
-        "llgm.inference.rlm.RLMRuntime.answer",
     )
     write_file(
         output,
@@ -123,7 +119,7 @@ def test_docs_check_requires_rendered_artifacts(tmp_path):
         ("README.md", '<a href="docs/quickstart.md">Guide</a>', "docs/quickstart.md"),
         ("AGENTS.md", "[Guide](docs/quickstart.md)", "docs/quickstart.md"),
         ("CONTRIBUTING.md", "[Guide](docs/quickstart.md)", "docs/quickstart.md"),
-        ("development/README.md", "[Guide](../docs/quickstart.md)", "../docs/quickstart.md"),
+        ("docs/contributing/README.md", "[Guide](../quickstart.md)", "../quickstart.md"),
         ("docs/index.md", "[Guide](quickstart.md)", "quickstart.md"),
         ("experiments/README.md", "[Guide](../docs/quickstart.md)", "../docs/quickstart.md"),
         ("agent-context/README.md", "[Guide](../docs/quickstart.md)", "../docs/quickstart.md"),
@@ -139,7 +135,7 @@ def test_docs_check_requires_rendered_artifacts(tmp_path):
             "../../research/REPORT.md",
         ),
         (
-            "development/branding.md",
+            "docs/contributing/branding.md",
             "![Logo](../_static/missing.svg)",
             "../_static/missing.svg",
         ),
@@ -267,20 +263,20 @@ def test_docs_check_keeps_external_markdown_out_of_site(tmp_path, rendered_docs)
 @pytest.mark.parametrize(
     "content",
     [
-        "[Publishing](../development/publishing.md)",
-        '<a href="../development/publishing.md">Publishing</a>',
-        "{download}`Publishing <../development/publishing.md>`",
-        "```{include} ../development/publishing.md\n```",
-        "```{literalinclude} ../development/release.py\n```",
-        "```{eval-rst}\n.. include:: ../development/publishing.md\n```",
+        "[Publishing](contributing/publishing.md)",
+        '<a href="contributing/publishing.md">Publishing</a>',
+        "{download}`Publishing <contributing/publishing.md>`",
+        "```{include} contributing/publishing.md\n```",
+        "```{literalinclude} contributing/release.py\n```",
+        "```{eval-rst}\n.. include:: contributing/publishing.md\n```",
         "[Contributing](../CONTRIBUTING.md)",
     ],
 )
 def test_docs_check_keeps_maintainer_guidance_out_of_user_docs(tmp_path, rendered_docs, content):
     """Site content cannot pull in repository publishing or contributor instructions."""
-    write_file(tmp_path, "development/publishing.md", "# Publishing\n")
-    write_file(tmp_path, "development/release.py", '"""Repository release command."""\n')
-    write_file(tmp_path, "CONTRIBUTING.md", "[Development](development/publishing.md)")
+    write_file(tmp_path, "docs/contributing/publishing.md", "# Publishing\n")
+    write_file(tmp_path, "docs/contributing/release.py", '"""Repository release command."""\n')
+    write_file(tmp_path, "CONTRIBUTING.md", "[Contributing](docs/contributing/publishing.md)")
     write_file(tmp_path, "docs/index.md", content)
     result = run_check(tmp_path, rendered_docs)
     assert result.returncode == 1
@@ -294,15 +290,17 @@ def test_docs_check_allows_repository_contributor_navigation(tmp_path, rendered_
     write_file(
         tmp_path,
         "CONTRIBUTING.md",
-        "[Development](development/README.md)\n[Context](agent-context/README.md)",
+        "[Contributing](docs/contributing/README.md)\n[Context](agent-context/README.md)",
     )
     write_file(
         tmp_path,
-        "development/README.md",
-        "[Guide](../docs/reference/api.md)\n[Architecture](../agent-context/ARCHITECTURE.md)",
+        "docs/contributing/README.md",
+        "[Guide](../reference/api.md)\n[Architecture](../../agent-context/ARCHITECTURE.md)",
     )
     write_file(tmp_path, "agent-context/README.md", "[Instructions](../AGENTS.md)")
-    write_file(tmp_path, "agent-context/ARCHITECTURE.md", "[Development](../development/README.md)")
+    write_file(
+        tmp_path, "agent-context/ARCHITECTURE.md", "[Contributing](../docs/contributing/README.md)"
+    )
     result = run_check(tmp_path, rendered_docs, repository_links=True)
     assert result.returncode == 0, result.stdout
 
@@ -376,7 +374,7 @@ def test_docs_check_validates_each_curated_context_file_without_git(tmp_path, re
     [
         ("AGENTS.md", "research/README.md", "internal research"),
         ("CONTRIBUTING.md", "agent-context/LOCAL_STATE.md", "local state"),
-        ("development/README.md", "../agent-context/local/notes.md", "local state"),
+        ("docs/contributing/README.md", "../../agent-context/local/notes.md", "local state"),
         ("experiments/README.md", "../research/README.md", "internal research"),
         ("agent-context/README.md", "../research/README.md", "internal research"),
         ("agent-context/README.md", "LOCAL_STATE.md", "local state"),
@@ -406,8 +404,8 @@ def test_docs_check_rejects_repository_dependencies_on_private_state(
         ("research/report.html", "published page has no source in docs"),
         ("_sources/research/report.md.txt", "published source is outside docs"),
         ("_downloads/old/report.md", "published Markdown download is outside docs"),
-        ("development/publishing.html", "published page has no source in docs"),
-        ("_sources/development/publishing.md.txt", "published source is outside docs"),
+        ("contributing/publishing.html", "published page has no source in docs"),
+        ("_sources/contributing/publishing.md.txt", "published source is outside docs"),
         ("_downloads/old/publishing.md", "published Markdown download is outside docs"),
         ("agent-context/README.html", "published page has no source in docs"),
         ("_sources/agent-context/README.md.txt", "published source is outside docs"),
@@ -415,6 +413,7 @@ def test_docs_check_rejects_repository_dependencies_on_private_state(
         ("_downloads/old/AGENTS.md", "published Markdown download is outside docs"),
         ("_static/agent-context/README.md", "repository-only asset is published"),
         ("_static/AGENTS.md", "repository-only asset is published"),
+        ("_static/contributing/publishing.md", "repository-only asset is published"),
         ("_static/research/report.md", "repository-only asset is published"),
         ("_static/brand/explorations/index.html", "repository-only asset is published"),
         ("_static/brand/explorations/04-return.svg", "repository-only asset is published"),
@@ -423,23 +422,26 @@ def test_docs_check_rejects_repository_dependencies_on_private_state(
 )
 def test_docs_check_rejects_retired_published_artifacts(tmp_path, rendered_docs, path, message):
     """Unlinked internal pages and downloads must not survive a documentation rebuild."""
+    write_file(tmp_path, "docs/contributing/publishing.md", "Internal research content")
     write_file(rendered_docs, path, "Internal research content")
     result = run_check(tmp_path, rendered_docs)
     assert result.returncode == 1
     assert f"{path}: {message}" in result.stdout
 
 
-def test_docs_check_rejects_retired_search_entries(tmp_path, rendered_docs):
+@pytest.mark.parametrize("directory", ["development", "contributing"])
+def test_docs_check_rejects_retired_search_entries(tmp_path, rendered_docs, directory):
     """Removed maintainer pages cannot remain discoverable through a stale search index."""
+    write_file(tmp_path, "docs/contributing/publishing.md", "# Publishing\n")
     index = {
-        "docnames": ["reference/api", "development/publishing"],
-        "filenames": ["reference/api.md", "development/publishing.md"],
+        "docnames": ["reference/api", f"{directory}/publishing"],
+        "filenames": ["reference/api.md", f"{directory}/publishing.md"],
     }
     write_file(rendered_docs, "searchindex.js", f"Search.setIndex({json.dumps(index)})")
     result = run_check(tmp_path, rendered_docs)
     assert result.returncode == 1
-    assert "docnames entry is outside docs: development/publishing" in result.stdout
-    assert "filenames entry is outside docs: development/publishing.md" in result.stdout
+    assert f"docnames entry is outside docs: {directory}/publishing" in result.stdout
+    assert f"filenames entry is outside docs: {directory}/publishing.md" in result.stdout
 
 
 def test_docs_check_accepts_current_search_entries(tmp_path, rendered_docs):
@@ -562,7 +564,7 @@ def test_internal_broken_links_do_not_block_public_docs(tmp_path, rendered_docs)
         "AGENTS.md",
         "CONTRIBUTING.md",
         "agent-context/README.md",
-        "development/README.md",
+        "docs/contributing/README.md",
         "experiments/README.md",
         "examples/README.md",
     )

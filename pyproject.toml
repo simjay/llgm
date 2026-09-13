@@ -18,8 +18,9 @@ Repository = "https://github.com/simjay/llgm"
 Issues = "https://github.com/simjay/llgm/issues"
 
 [project.optional-dependencies]
+rlm = ["dspy[deno]==3.3.1", "deno==2.9.6"]
 openai = ["openai>=2.54,<3"]
-benchmark = ["openai>=2.54,<3", "tiktoken==0.11.0"]
+benchmark = ["dspy[deno]==3.3.1", "deno==2.9.6", "openai>=2.54,<3", "tiktoken==0.11.0"]
 anthropic = ["anthropic>=0.125,<1"]
 s3 = ["boto3>=1.35,<2"]
 tokenizers = ["transformers>=4.45,<5", "tiktoken>=0.9,<1"]
@@ -27,7 +28,7 @@ colbert = ["colbert-ai>=0.2.21,<0.3", "torch>=2.2", "transformers>=4.45,<5", "fa
 modal = ["modal==1.5.5"]
 
 [dependency-groups]
-dev = ["pytest>=8,<10", "ruff==0.16.6", "coverage>=7.10,<8", "build>=1.2", "twine>=6"]
+dev = ["dspy[deno]==3.3.1", "deno==2.9.6", "pytest>=8,<10", "ruff==0.16.6", "coverage>=7.10,<8", "build>=1.2", "twine>=6"]
 docs = ["sphinx==8.2.3", "myst-parser==4.0.1", "sphinx-rtd-theme==3.1.0", "sphinxcontrib-mermaid==2.0.2"]
 
 [project.scripts]
@@ -37,8 +38,8 @@ llgm = "llgm.cli:main"
 packages = ["src/llgm"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/tests", "/docs", "/development", "/examples", "/experiments", "/tools", "/pyproject.toml", "/README.md", "/CONTRIBUTING.md", "/LICENSE", "/Makefile", "/.readthedocs.yaml", "/.github/workflows/ci.yml", "/.github/workflows/colbert.yml", "/.github/workflows/docs.yml", "/.github/workflows/publish.yml"]
-exclude = ["/docs/_build", "/docs/development", "/docs/_static/brand/explorations", "/development/brand-explorations", "/experiments/*.md"]
+include = ["/src", "/tests", "/docs", "/examples", "/experiments", "/tools", "/pyproject.toml", "/README.md", "/CONTRIBUTING.md", "/LICENSE", "/Makefile", "/.readthedocs.yaml", "/.github/workflows/ci.yml", "/.github/workflows/colbert.yml", "/.github/workflows/docs.yml", "/.github/workflows/publish.yml"]
+exclude = ["/docs/_build", "/docs/_static/brand/explorations", "/docs/contributing/brand-explorations", "/experiments/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -51,8 +52,7 @@ markers = [
     "anthropic: opted-in Anthropic native schema contract",
     "embedding: opted-in hosted embedding contract",
     "colbert: opted-in local official ColBERT/PLAID build and reopen",
-    "recursive: opted-in real-model recursive inference contract",
-    "docker: opted-in real Docker REPL isolation and callback checks",
+    "sandbox: opted-in DSPy Deno/Pyodide isolation and callback checks",
     "s3: opted-in S3 blob publication, restart and exact-object cleanup",
 ]
 

@@ -32,7 +32,7 @@ jobs:
       - name: Install the core distribution
         run: |
           python -m pip install --upgrade pip
-          python -m pip install . 'pytest>=8,<10'
+          python -m pip install '.[rlm]' 'pytest>=8,<10'
           python -m pip check
       - name: Test the installed package outside the checkout
         working-directory: ${{ runner.temp }}
@@ -54,7 +54,7 @@ jobs:
       - name: Install native provider extras
         run: |
           python -m pip install --upgrade pip
-          python -m pip install '.[openai,anthropic]' 'pytest>=8,<10'
+          python -m pip install '.[openai,anthropic,rlm]' 'pytest>=8,<10'
           python -m pip check
       - name: Test fake SDK payloads and installed signatures
         working-directory: ${{ runner.temp }}
@@ -63,7 +63,7 @@ jobs:
         run: >-
           python -I -m pytest
           "$GITHUB_WORKSPACE/tests/test_models.py"
-          "$GITHUB_WORKSPACE/tests/test_runtime.py"
+          "$GITHUB_WORKSPACE/tests/test_budget.py"
           "$GITHUB_WORKSPACE/tests/test_packaging.py"
           --import-mode=importlib -q
 
@@ -92,6 +92,7 @@ jobs:
         run: |
           python -m venv "$RUNNER_TEMP/llgm-wheel-env"
           "$RUNNER_TEMP/llgm-wheel-env/bin/python" -m pip install 'pytest>=8,<10' "$GITHUB_WORKSPACE"/dist/*.whl
+          "$RUNNER_TEMP/llgm-wheel-env/bin/python" -m pip install 'llgm[rlm]'
           "$RUNNER_TEMP/llgm-wheel-env/bin/python" -m pip check
       - name: Test the wheel outside the checkout
         working-directory: ${{ runner.temp }}
@@ -104,6 +105,7 @@ jobs:
         run: |
           python -m venv "$RUNNER_TEMP/llgm-sdist-env"
           "$RUNNER_TEMP/llgm-sdist-env/bin/python" -m pip install 'pytest>=8,<10' "$GITHUB_WORKSPACE"/dist/*.tar.gz
+          "$RUNNER_TEMP/llgm-sdist-env/bin/python" -m pip install 'llgm[rlm]'
           "$RUNNER_TEMP/llgm-sdist-env/bin/python" -m pip check
       - name: Test the installed source distribution outside the checkout
         working-directory: ${{ runner.temp }}
@@ -134,7 +136,7 @@ jobs:
           python-version: "3.11"
       - name: Install core tests and hosted SDK contract dependencies
         run: >-
-          python -m pip install '.[openai,anthropic]'
+          python -m pip install '.[openai,anthropic,rlm]'
           'pytest>=8,<10' 'coverage>=7.10,<8'
       - name: Measure deterministic contracts without dataset or live calls
         run: python -m coverage run -m pytest -m 'not integration' -q
@@ -170,3 +172,20 @@ jobs:
           python -m pip install --group docs .
       - name: Build Sphinx and MyST documentation with warnings as errors
         run: make docs PYTHON=python DOCS_BUILD_DIR="$RUNNER_TEMP/llgm-docs"
+
+  sandbox:
+    name: DSPy sandbox / no hosted model calls
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python -m pip install '.[rlm]' 'pytest>=8,<10'
+      - name: Verify actual Deno/Pyodide execution and cleanup
+        env:
+          LLGM_TEST_SANDBOX: "1"
+        run: python -m pytest tests/test_repl_sandbox.py -m sandbox -q

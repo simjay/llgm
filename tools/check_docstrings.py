@@ -34,19 +34,19 @@ def inspect_tree(tree: ast.AST, label: str) -> tuple[int, list[str]]:
 
 
 def inspect_file(path: Path) -> tuple[int, list[str]]:
-    """Check the file and the REPL worker's embedded Python source when present."""
+    """Check the file and embedded sandbox setup source when present."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     total, missing = inspect_tree(tree, str(path))
-    # The worker is shipped as source text; inspecting only its host assignment
-    # would omit the Python functions that actually run inside the container.
+    # Sandbox setup is shipped as source text. Inspecting only the assignment
+    # would omit functions executed inside WASM.
     for node in tree.body:
         if (
             isinstance(node, ast.Assign)
-            and any(isinstance(t, ast.Name) and t.id == "_WORKER" for t in node.targets)
+            and any(isinstance(t, ast.Name) and t.id == "_SANDBOX_SETUP" for t in node.targets)
             and isinstance(node.value, ast.Constant)
             and isinstance(node.value.value, str)
         ):
-            count, absent = inspect_tree(ast.parse(node.value.value), f"{path}::_WORKER")
+            count, absent = inspect_tree(ast.parse(node.value.value), f"{path}::_SANDBOX_SETUP")
             total += count
             missing.extend(absent)
     return total, missing

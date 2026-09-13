@@ -24,10 +24,6 @@ API_ANCHORS = (
     "llgm.Evidence.read",
     "llgm.retrieval.base.Embedder.embed",
     "llgm.storage.BlobStore.get",
-    "llgm.inference.recursive.RecursiveRuntime",
-    "llgm.inference.recursive.RecursiveRuntime.answer",
-    "llgm.inference.rlm.RLMRuntime",
-    "llgm.inference.rlm.RLMRuntime.answer",
 )
 LOCAL_LINK = re.compile(r"^(?:/(?:Users|home|private|tmp|var|Volumes)/|[A-Za-z]:[\\/]|file:)")
 MARKDOWN_LINK = re.compile(r"!?\[[^\]\n]*\]\(\s*(<[^>\n]+>|[^\s()]+(?:\([^()]*\)[^\s()]*)*)")
@@ -37,7 +33,6 @@ INCLUDE_LINK = re.compile(r"^\s*\.\.\s+(?:include|literalinclude)::\s+(\S+)")
 MYST_INCLUDE = re.compile(r"^\{(?:include|literalinclude)\}\s+(\S+)")
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 REPOSITORY_DIRECTORIES = (
-    "development",
     "experiments",
     "examples",
     "tests/fixtures",
@@ -69,6 +64,7 @@ VOID_ELEMENTS = {
 }
 PROSE_PUNCTUATION = {"—": "em dash", ";": "semicolon"}
 EXCLUDED_SITE_PATHS = (
+    "contributing",
     "development",
     "research",
     "agent-context",
@@ -77,6 +73,7 @@ EXCLUDED_SITE_PATHS = (
     "_static/research",
     "_static/agent-context",
     "_static/AGENTS.md",
+    "_static/contributing",
     "_static/brand/explorations",
 )
 
@@ -242,6 +239,7 @@ def check_sources(root: Path, *, repository_links: bool = False) -> list[str]:
     """Audit public sources, optionally checking separate repository documents too."""
     errors = []
     sources = []
+    contributor_docs = root / "docs" / "contributing"
     public_context = {root / "agent-context" / name for name in PUBLIC_AGENT_CONTEXT}
     if repository_links:
         sources.extend(
@@ -255,12 +253,17 @@ def check_sources(root: Path, *, repository_links: bool = False) -> list[str]:
         sources.extend(
             path
             for path in (root / directory).rglob("*")
-            if path.suffix in (".md", ".html") and "_build" not in path.parts
+            if path.suffix in (".md", ".html")
+            and "_build" not in path.parts
+            and (repository_links or not path.is_relative_to(contributor_docs))
         )
     for path in sorted(sources):
-        if path.is_relative_to(root / "docs"):
+        public = path.is_relative_to(root / "docs") and not path.is_relative_to(contributor_docs)
+        if public:
             errors.extend(prose_errors(path.relative_to(root), source_prose(path)))
-        if any(path.is_relative_to(root / "docs" / name) for name in EXCLUDED_SITE_PATHS):
+        if public and any(
+            path.is_relative_to(root / "docs" / name) for name in EXCLUDED_SITE_PATHS
+        ):
             errors.append(f"{path.relative_to(root)}: repository-only content is inside docs")
         for target, number in source_targets(path):
             location = f"{path.relative_to(root)}:{number}"
@@ -277,7 +280,7 @@ def check_sources(root: Path, *, repository_links: bool = False) -> list[str]:
             if (
                 destination.is_relative_to(root / "agent-context")
                 or destination == root / "AGENTS.md"
-            ) and path.is_relative_to(root / "docs"):
+            ) and public:
                 errors.append(f"{location}: public documentation links to agent context: {target}")
             if destination.is_relative_to(root / "research"):
                 errors.append(
@@ -294,8 +297,9 @@ def check_sources(root: Path, *, repository_links: bool = False) -> list[str]:
                 errors.append(
                     f"{location}: repository documentation links to local state: {target}"
                 )
-            if path.is_relative_to(root / "docs") and (
-                destination.is_relative_to(root / "development")
+            if public and (
+                destination.is_relative_to(contributor_docs)
+                or destination.is_relative_to(root / "development")
                 or destination.is_relative_to(root / "experiments")
                 or destination == root / "CONTRIBUTING.md"
             ):
@@ -303,7 +307,7 @@ def check_sources(root: Path, *, repository_links: bool = False) -> list[str]:
                     f"{location}: end-user documentation links to repository guidance: {target}"
                 )
             if (
-                path.is_relative_to(root / "docs")
+                public
                 and destination.suffix == ".md"
                 and not destination.is_relative_to(root / "docs")
             ):

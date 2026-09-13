@@ -15,7 +15,7 @@ Sending the entire history on every question makes the model input grow with
 the archive. A running summary is smaller, but its author has to choose what to
 keep before knowing every future question. Passage search gives you relevant
 excerpts, but the first matches may only point toward the answer. LLGM keeps the
-original evidence available and makes retrieval the beginning of an investigation.
+original evidence available so readers can investigate beyond the first match.
 
 This page develops that idea through a team's database discussions. The
 [architecture tutorial](architecture.md) follows the same example through the
@@ -63,8 +63,8 @@ You later ask:
 > Which database does production use, and how long are backups kept?
 
 LLGM keeps related discussion in a **topic node**. Several sessions can share
-a node. A node contains the turns,
-speaker roles and metadata, with an ID that identifies it in storage. The
+a node. A node contains turns, speaker roles and metadata, with an ID that identifies
+it in storage. The
 Database and Backups names here are labels for the example.
 
 Published turns are **immutable**. New turns append to the same topic while
@@ -75,17 +75,24 @@ around it.
 
 ## Find a starting point
 
+LLGM starts with the conversation's **current topic**, the node where its latest
+related turns were stored. If you are discussing Database and ask "What about
+backups?", Database is the first target even if those words do not match a stored
+passage. The current pointer belongs to that conversation and survives a restart.
+
 Search works with **passages**, which are small pieces of stored evidence.
 A useful paragraph can rank well even when the rest of its conversation is
 about something else.
 
-LLGM uses the passage ranking to choose a few owning nodes as **seeds**. A seed
-is a starting point for investigation. For this question, Database and Backups
-would be useful seeds.
+These starting nodes are called **seeds**. After the current topic, passage
+rankings can add a few other owning nodes, such as Backups. Without a current
+topic, search supplies the seeds. The [node search guide](node-search.md) explains
+the selection limits and explicit overrides.
 
-A passage is the unit of search. A node is the unit of topic storage and delegation. Its size does not trigger
-automatic splitting. The RLM can inspect selected portions of a very long topic. Searching passages helps find the relevant part of a long node
-without sending the whole node to a model.
+Search ranks passages, while readers investigate nodes. A long topic does not
+split automatically. Its reader can use matching passages to find a useful part
+of the discussion, then request more context without loading the whole topic
+into a model prompt.
 
 ## Give each starting node a reader
 
@@ -117,9 +124,9 @@ reading and another for synthesis, or use the same model for both.
 ## Connect conversations when one points to another
 
 Now suppose the question also asks where production is hosted. An **edge** from
-Database to Registry records a relationship between those nodes. The edge has
-a direction, supporting evidence, and no relationship type. It records a connection.
-The RLM reader determines what the connection means for its question.
+Database to Registry records a relationship between those nodes. The edge records a direction and the evidence behind the connection. Its reader
+decides whether that connection is useful for the question. Edges do not carry
+relationship categories such as support or contradiction.
 
 The Database delegate can inspect that edge and ask a child delegate:
 
@@ -138,8 +145,8 @@ graph.
 
 ## Apply a correction without erasing the old statement
 
-The team later says that production has moved to MySQL. Store that statement
-in a new Update node.
+The team later says that production has moved to MySQL. For this example, the
+replacement statement is stored separately in an Update node.
 
 A node's **journal** records notes and explicit amendments to how its evidence
 should be read. Your application can add an amendment on Database that replaces

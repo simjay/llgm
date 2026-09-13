@@ -80,9 +80,7 @@ def longmemeval(longmemeval_manifest):
         else PROJECT_ROOT / "data/longmemeval" / longmemeval_manifest["file"]
     )
     path = path.expanduser().resolve()
-    explicitly_required = configured is not None or any(
-        os.environ.get(flag) == "1" for flag in ("LLGM_TEST_COLBERT", "LLGM_TEST_RECURSIVE")
-    )
+    explicitly_required = configured is not None or os.environ.get("LLGM_TEST_COLBERT") == "1"
     if not path.is_file():
         if explicitly_required:
             pytest.fail(
@@ -194,22 +192,3 @@ def live_colbert():
         "repository_revision": required_env("LLGM_TEST_COLBERT_REVISION"),
         "gpus": int(os.environ.get("LLGM_TEST_COLBERT_GPUS", "0")),
     }
-
-
-@pytest.fixture
-def live_recursive():
-    """Validate both provider/model roles before recursive hosted execution."""
-    require_opt_in("LLGM_TEST_RECURSIVE")
-    result = {}
-    for role in ("MAIN", "READER"):
-        provider = required_env(f"LLGM_TEST_RECURSIVE_{role}_PROVIDER")
-        if provider not in {"openai", "anthropic"}:
-            pytest.fail(
-                "Recursive live test supports explicit openai or anthropic providers", pytrace=False
-            )
-        required_env("OPENAI_API_KEY" if provider == "openai" else "ANTHROPIC_API_KEY")
-        result[role.lower()] = {
-            "provider": provider,
-            "model": pinned_model(f"LLGM_TEST_RECURSIVE_{role}_MODEL"),
-        }
-    return result

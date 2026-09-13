@@ -16,6 +16,46 @@ from llgm.retrieval.tokenizers import ColBERTTokenizer
 pytestmark = [pytest.mark.integration, pytest.mark.dataset, pytest.mark.colbert]
 
 
+def test_small_workspace_hybrid_refresh_and_reopen(live_colbert, tmp_path):
+    """Real ColBERT serves a tiny workspace and preserves hybrid ranks across an append and restart."""
+    from llgm.retrieval.live import WorkspaceIndexService
+
+    config = ColBERTConfig(**live_colbert, index_root=tmp_path, index_name="live", query_maxlen=128)
+    service = WorkspaceIndexService(tmp_path / "workspaces", config)
+    records = [
+        {
+            "node_id": "atlas",
+            "turns": [
+                {
+                    "turn_id": "t1",
+                    "role": "user",
+                    "text": "Atlas database backups are retained for seven days.",
+                }
+            ],
+            "metadata": {},
+            "timestamp_ms": None,
+        }
+    ]
+    prepared = service.prepare(records)
+    assert prepared["descriptor"]["components"][1]["backend"] == "colbertv2_exact"
+    first = service.search(prepared["index_id"], "How long are backups kept?", 12)
+    assert len(first["hits"]) == 1
+    assert first["hits"][0]["passage"]["refs"][0]["turn_id"] == "t1"
+    records[0]["turns"].append(
+        {"turn_id": "t2", "role": "user", "text": "Restore tests run every Friday."}
+    )
+    changed = service.prepare(records)
+    assert changed["index_id"] != prepared["index_id"]
+    newest = service.search(changed["index_id"], "When are restore tests?", 12)
+    assert len(newest["hits"]) == 2
+    restarted = WorkspaceIndexService(service.root, config)
+    reopened = restarted.search(changed["index_id"], "When are restore tests?", 12)
+    assert [h["passage_id"] for h in reopened["hits"]] == [h["passage_id"] for h in newest["hits"]]
+    assert [h["score"] for h in reopened["hits"]] == pytest.approx(
+        [h["score"] for h in newest["hits"]]
+    )
+
+
 def test_colbert_build_search_reopen(live_colbert, longmemeval, tmp_path, integration_record):
     """A real pinned PLAID index preserves top-40 passage identities after reopen."""
     record, _ = integration_record

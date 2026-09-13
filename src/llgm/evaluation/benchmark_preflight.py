@@ -1,21 +1,24 @@
 """Validate benchmark execution prerequisites before any cost-bearing model setup."""
 
 import importlib.metadata
-import re
 import subprocess
 
 from llgm import LLGM, Budget, MaintenancePolicy
 from llgm.core.errors import ConfigurationError
-from llgm.inference.repl import DockerREPLConfig
+from llgm.inference.repl import SandboxConfig
 
 
 def preflight_runtime(protocol: dict) -> dict:
-    """Validate configuration, load the reader tokenizer and inspect a pinned local image.
+    """Validate DSPy and Deno identities before any cost-bearing model setup.
 
-    No models, workspaces or containers are created, and no Docker image is
-    pulled. Normal tiktoken loading may populate its verified asset cache.
-    The synchronous Docker inspection is bounded by the configured startup timeout.
+    Runtime assets may be fetched on first sandbox startup. This preflight
+    checks installed packages and the executable without starting generated code.
+    Historical Docker protocols require their original checkout.
     """
+    if "docker" in protocol:
+        raise ConfigurationError(
+            "Historical Docker protocol requires its original checkout. Use a DSPy protocol with sandbox and rlm fields."
+        )
     try:
         concurrency = protocol["limits"].get("concurrent_cases", 1)
         if type(concurrency) is not int or not 1 <= concurrency <= 8:
@@ -32,7 +35,7 @@ def preflight_runtime(protocol: dict) -> dict:
             **{key: value for key, value in maintenance.items() if key != "budget"},
             budget=Budget(**maintenance["budget"]),
         )
-        docker = DockerREPLConfig(**protocol["docker"])
+        sandbox = SandboxConfig(**protocol["sandbox"])
         LLGM(
             None,
             None,
@@ -40,7 +43,7 @@ def preflight_runtime(protocol: dict) -> dict:
             graph_model=None,
             maintenance_policy=policy,
             inference_budget=budget,
-            repl_config=docker,
+            repl_config=sandbox,
             capture_text=True,
             **protocol["runtime"],
         )
@@ -54,8 +57,17 @@ def preflight_runtime(protocol: dict) -> dict:
             raise ConfigurationError("Reader requires exactly four positive integer limits")
     except (KeyError, TypeError, AttributeError) as exc:
         raise ConfigurationError("Invalid benchmark execution configuration") from exc
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", docker.image):
-        raise ConfigurationError("Benchmark Docker image must be pinned to its full sha256 ID")
+    identity = protocol.get("rlm")
+    if identity != {"implementation": "dspy", "version": "3.3.1", "deno_version": "2.9.6"}:
+        raise ConfigurationError("Benchmark requires pinned DSPy and Deno identities")
+    try:
+        from deno import find_deno_bin
+
+        if importlib.metadata.version("dspy") != identity["version"]:
+            raise ConfigurationError("Installed DSPy does not match the protocol")
+        executable = find_deno_bin()
+    except (ImportError, FileNotFoundError, importlib.metadata.PackageNotFoundError) as exc:
+        raise ConfigurationError("Benchmark requires llgm[rlm]") from exc
     try:
         import tiktoken
 
@@ -66,21 +78,23 @@ def preflight_runtime(protocol: dict) -> dict:
         ) from exc
     try:
         result = subprocess.run(
-            [docker.docker_executable, "image", "inspect", "--format", "{{.Id}}", docker.image],
+            [executable, "--version"],
             capture_output=True,
             text=True,
-            timeout=docker.startup_timeout_seconds,
+            timeout=sandbox.startup_timeout_seconds,
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise ConfigurationError("Benchmark requires an available local Docker image") from exc
-    identity = result.stdout.strip()
-    if result.returncode or identity != docker.image:
-        raise ConfigurationError("Local Docker image does not match the pinned image ID")
+        raise ConfigurationError("Benchmark requires an available Deno executable") from exc
+    if result.returncode or (result.stdout.splitlines() or [""])[0].split()[:2] != [
+        "deno",
+        identity["deno_version"],
+    ]:
+        raise ConfigurationError("Deno executable does not match the protocol")
     versions = {}
-    for package in ("llgm", "tiktoken", "openai"):
+    for package in ("llgm", "tiktoken", "openai", "dspy", "deno"):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             versions[package] = None
-    return {"docker_image_id": identity, "tokenizer": encoding.name, "package_versions": versions}
+    return {"rlm": identity, "tokenizer": encoding.name, "package_versions": versions}

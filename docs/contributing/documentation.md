@@ -10,18 +10,18 @@ development, testing, release operations, and research have separate homes.
 | --- | --- |
 | Repository `README.md` | Project introduction and links to the user documentation and contributor entry point. |
 | `CONTRIBUTING.md` | Contributor entry point for setup, standards, and checks. |
-| `docs/guide/` | Library users: installation, configuration, concepts, architecture, and worked examples. |
+| `docs/guide/` | Library users: installation, conversations and imports, configuration, concepts, architecture, search, graph inspection and worked examples. |
 | `docs/reference/` | Library users: generated public API signatures and current capability limits. |
-| `development/` | Repository-only contributor and maintainer guides: checkout setup, code ownership, standards, testing, documentation, branding, and publication. |
+| `docs/contributing/` | Repository-only contributor and maintainer guides: checkout setup, code ownership, standards, testing, documentation, branding, and publication. |
 | `examples/` | Runnable examples, indexed by its `README.md`. |
 | `experiments/` | Repository-only benchmark configurations, frozen protocols, source pins, and run commands. |
-| `AGENTS.md` | Tracked instructions for agents working in a fresh clone. Contributor guidance remains in `CONTRIBUTING.md` and `development/`. Excluded from the documentation site and source distribution. |
+| `AGENTS.md` | Tracked instructions for agents working in a fresh clone. Contributor guidance remains in `CONTRIBUTING.md` and `docs/contributing/`. Excluded from the documentation site and source distribution. |
 | Local `research/` | Ignored, untracked designs, hypotheses, original briefs, and dated measurements. Never committed, pushed, or published. |
 | `agent-context/` | Six tracked Markdown files for shared coding-agent knowledge, decisions, code pointers, testing, and remaining work. Excluded from the user site and packages. All other files in this directory stay private. |
 
 Give each fact a canonical home. Instructions for running the library belong in
-`docs/`. Instructions for changing, testing, or releasing this repository belong
-in `development/`. Agent notes may refer to either without copying them. Keep
+`docs/guide/` and `docs/reference/`. Instructions for changing, testing, or releasing this repository belong
+in `docs/contributing/`. Agent notes may refer to either without copying them. Keep
 machine paths, transient credential availability, and current task state in
 ignored local agent notes. Never store credentials in any of these documents.
 
@@ -32,8 +32,8 @@ archives, or published assets. `.gitignore` allows only `README.md`,
 `REMAINING_TASKS.md` under `agent-context/`. Other entries there, including `local/`
 and `LOCAL_STATE.md`, remain ignored. Never force-add them.
 
-[Agent context](../agent-context/README.md) follows the root
-[AGENTS.md](../AGENTS.md) entry point. It stores concise project knowledge, not
+[Agent context](../../agent-context/README.md) follows the root
+[AGENTS.md](../../AGENTS.md) entry point. It stores concise project knowledge, not
 conversation transcripts or private experiment reports. Repository guidance may
 link these shared files. Tracked documents must not depend on private notes or
 research. Contributor instructions, tests, and builds must work in a fresh clone
@@ -56,9 +56,12 @@ indexes are reading guides and must not introduce another nested navigation tree
 Cross-links may lead directly to a page or heading when they explain a concept.
 They do not replace sidebar navigation.
 
-The root `CONTRIBUTING.md` leads to `development/README.md`. Development pages
+The root `CONTRIBUTING.md` leads to `docs/contributing/README.md`. Contributor pages
 use ordinary Markdown and relative links, without Sphinx directives. They are
-read in the repository and have no entry in the published site's navigation.
+read in the repository. Sphinx excludes `contributing/` entirely, including
+its source exports and search entries. Removing pages from navigation alone
+is insufficient. The public audit skips contributor sources, while
+`make docs-links` checks their repository links.
 
 Do not link, include, mirror, or offer downloads of repository-only development,
 research, experiment runbooks, or agent notes in published pages. A library user
@@ -70,10 +73,11 @@ directives, and any validation code that names its generated HTML. Avoid
 workstation-specific links. Sphinx API directives remain executable directives
 in public reference pages, not code examples displayed as plain text.
 
-`docs/` is the only published prose source. Sphinx also extracts public API
+`docs/index.md`, `docs/guide/`, and `docs/reference/` own the published prose. Sphinx also extracts public API
 reference from library docstrings. Files under `docs/_static/` are selected site
-assets. Brand explorations belong in `development/brand-explorations/`.
-Do not mirror or include Markdown from elsewhere in the repository. Benchmark
+assets. Brand explorations belong in `docs/contributing/brand-explorations/`.
+Do not mirror or include contributor Markdown or Markdown from elsewhere in
+the repository in public pages. Benchmark
 run instructions stay in `experiments/`, and the examples README remains a
 repository index. Public guides may link to or offer downloads of individual
 example scripts when those files support the documented workflow.
@@ -96,8 +100,15 @@ This rule also applies to docstrings rendered in the public API reference.
 Teach concepts and architecture through a concrete example. Introduce each term
 when the reader first needs it, explain one step at a time, and show how each
 step changes the example. Keep field lists and detailed contracts in reference
-sections. Check examples against current signatures and remove obsolete advice
-instead of keeping a history of previous designs in user pages.
+sections. Keep the first runnable program consistent across README, site home
+and Quickstart. Put import and retry details in the conversation guide, settings
+in configuration, and ranking details in node search. State when a tutorial
+explicitly chooses a different backend from the library default.
+
+Check examples against current signatures and remove obsolete advice instead
+of keeping a history of previous designs in user pages. Installation commands
+must identify an available release or a repository checkout. A pending release
+command must not be the only way to run a guide.
 
 Keep original briefs and dated research reports in local `research/`. Preserve
 frozen experiment protocols in `experiments/` and generated run artifacts in
@@ -109,8 +120,8 @@ limitations without reproducing internal reports or task history.
 | Change | Documentation to review |
 | --- | --- |
 | Public behavior, signature, or configuration | Relevant user guide and API docstrings. Implementation status when support changes. |
-| Internal module boundary or resource ownership | Development code map and relevant implementation docstrings. Update user architecture only when observable behavior or a supported extension contract changes. |
-| Validation command or contributor requirement | Development setup, testing guide, or standards, plus any command wrappers and CI that implement it. |
+| Internal module boundary or resource ownership | Contributor code map and relevant implementation docstrings. Update user architecture only when observable behavior or a supported extension contract changes. |
+| Validation command or contributor requirement | Contributor setup, testing guide, or standards, plus any command wrappers and CI that implement it. |
 | Benchmark method or frozen inputs | Repository-only experiment instructions and the applicable protocol. Create a new protocol version for a changed frozen run. |
 | Completed measurement | Local dated report with code/input identities, denominators, limitations, and artifact locations. Update public capability limits only when the evidence supports them. |
 | Shared design decision or public task status | Relevant curated agent-context file, with implementation pointers and an observable completion check. |

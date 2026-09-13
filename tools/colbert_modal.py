@@ -378,6 +378,59 @@ def search_index(index_id: str, query: str, k: int) -> dict:
     return search(index_id, query, k)
 
 
+_workspace_service = None
+
+
+def workspace_service():
+    """Reuse one live workspace service separately from the frozen benchmark indexes."""
+    global _workspace_service
+    if _workspace_service is None:
+        from colbert_worker import _configuration
+
+        from llgm.retrieval.live import WorkspaceIndexService
+
+        _workspace_service = WorkspaceIndexService(
+            ASSETS / "workspaces", _configuration("0" * 64, PINS)
+        )
+    return _workspace_service
+
+
+@app.function(
+    image=image,
+    gpu=PINS["gpu"],
+    cpu=PINS["cpu"],
+    memory=PINS["memory_mib"],
+    volumes={"/assets": volume},
+    timeout=2400,
+    max_containers=1,
+    retries=0,
+    scaledown_window=60,
+)
+def prepare_workspace(records: list[dict]) -> dict:
+    """Index an uploaded source snapshot for application and viewer hybrid search."""
+    volume.reload()
+    result = workspace_service().prepare(records)
+    volume.commit()
+    return result
+
+
+@app.function(
+    image=image,
+    gpu=PINS["gpu"],
+    cpu=PINS["cpu"],
+    memory=PINS["memory_mib"],
+    volumes={"/assets": volume},
+    timeout=180,
+    max_containers=1,
+    retries=0,
+    scaledown_window=60,
+)
+def search_workspace(index_id: str, query: str, k: int) -> dict:
+    """Search the current uploaded generation with matching BM25 and ColBERT corpora."""
+    volume.reload()
+    return workspace_service().search(index_id, query, k)
+
+
 def collect_run(run_id: str, destination: Path) -> None:
     """Copy each retained artifact from this run without exposing unrelated data."""
     for entry in volume.iterdir(f"/runs/{run_id}", recursive=True):

@@ -22,7 +22,9 @@ class HybridRetriever:
         ):
             raise ConfigurationError("Invalid RRF rank constant or pool size")
         left, right = lexical.descriptor(), dense.descriptor()
-        if left.get("corpus_sha256") != right.get("corpus_sha256"):
+        left_id = left.get("corpus_sha256", left.get("corpus_fingerprint"))
+        right_id = right.get("corpus_sha256", right.get("corpus_fingerprint"))
+        if not left_id or left_id != right_id:
             raise ConfigurationError("Hybrid backends must index identical passages")
         self.lexical, self.dense = lexical, dense
         self.rank_constant, self.pool_size = rank_constant, pool_size

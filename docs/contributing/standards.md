@@ -19,7 +19,7 @@ Do not narrate assignments and loops, restate a function name, add progress note
 
 ## Docstrings
 
-Every Python module, class, function and method has a meaningful docstring. This includes private helpers, constructors, nested functions, test fixtures, test methods and the embedded REPL worker. Lambdas and generated third-party code are outside this rule.
+Every Python module, class, function and method has a meaningful docstring. This includes private helpers, constructors, nested functions, test fixtures, test methods and embedded sandbox setup. Lambdas and generated third-party code are outside this rule.
 
 - Start with one sentence stating the contract or tested behavior.
 - Add details only where needed: units, ownership, side effects, visibility, meaningful failure modes or a return value that types alone do not explain.
@@ -27,7 +27,7 @@ Every Python module, class, function and method has a meaningful docstring. This
 - A test docstring describes the invariant, such as “A restart preserves passage IDs and ranking.” It does not promise overall correctness.
 - Keep historical design discussions in internal repository notes, not API docstrings.
 
-`python tools/check_docstrings.py` checks presence across `src`, `tests`, `examples`, `tools`, and `docs/conf.py`, including private definitions and embedded worker code. Review still determines whether the wording helps.
+`python tools/check_docstrings.py` checks presence across `src`, `tests`, `examples`, `tools`, and `docs/conf.py`, including private definitions and embedded sandbox setup. Review still determines whether the wording helps.
 
 ## Abstractions
 

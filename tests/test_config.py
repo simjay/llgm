@@ -41,7 +41,7 @@ def test_independent_instances_and_snapshot_of_environment(monkeypatch):
 
 
 @pytest.mark.parametrize("process_environment", [False, True])
-def test_application_settings_coexist_with_integration_and_repl_environment(
+def test_application_settings_coexist_with_integration_environment(
     monkeypatch, process_environment
 ):
     """Separate environment namespaces cannot enter application values or diagnostics."""
@@ -51,8 +51,6 @@ def test_application_settings_coexist_with_integration_and_repl_environment(
         "LLGM_TEST_OPENAI": "0",
         "LLGM_TEST_APPLICATION_MAIN_MODEL": "integration-model",
         "LLGM_TEST_LONGMEMEVAL_PATH": "/private/local-dataset.json",
-        "LLGM_REPL_DOCKER_IMAGE": "trusted-image@sha256:fixture",
-        "LLGM_REPL_HOST_SECRET": "private-repl-value",
     }
     if process_environment:
         for name in tuple(os.environ):
@@ -68,13 +66,13 @@ def test_application_settings_coexist_with_integration_and_repl_environment(
     assert settings.field_sources["main_model"] == "environment"
     diagnostics = repr(settings.redacted()) + repr(settings)
     for name, value in environment.items():
-        if name.startswith(("LLGM_TEST_", "LLGM_REPL_")):
+        if name.startswith("LLGM_TEST_"):
             assert name not in diagnostics
             if len(value) > 1:
                 assert value not in diagnostics
 
 
-@pytest.mark.parametrize("name", ["test_openai", "repl_docker_image"])
+@pytest.mark.parametrize("name", ["test_openai", "test_application_main_model"])
 def test_external_environment_names_are_not_application_file_or_override_fields(tmp_path, name):
     """Namespace separation applies to process variables, never unknown TOML or override keys."""
     with pytest.raises(ConfigurationError, match="Unknown LLGM setting"):
@@ -154,8 +152,6 @@ def test_context_allowance_is_configurable_with_recorded_precedence(tmp_path):
         {"max_seed_nodes": 4, "retrieval_k": 3},
         {"max_concurrency": True},
         {"max_journal_bytes": 0},
-        {"node_repl_image": "-bad"},
-        {"node_repl_image": "python image"},
     ],
 )
 def test_node_execution_configuration_rejects_invalid_admission(values):
@@ -164,19 +160,14 @@ def test_node_execution_configuration_rejects_invalid_admission(values):
         Settings(**values)
 
 
-def test_node_image_environment_setting_is_distinct_from_integration_namespace():
-    """The application image can be configured while unrelated REPL test values remain private."""
-    settings = Settings.from_env(
-        environ={
-            "LLGM_NODE_REPL_IMAGE": "python@sha256:fixture",
-            "LLGM_MAX_CONCURRENCY": "2",
-            "LLGM_REPL_DOCKER_IMAGE": "separate-test-image",
-        }
-    )
-    assert settings.node_repl_image == "python@sha256:fixture"
+@pytest.mark.parametrize("name", ["LLGM_NODE_REPL_IMAGE", "LLGM_REPL_DOCKER_IMAGE"])
+def test_retired_docker_setting_is_not_silently_ignored(name):
+    """Old image configuration fails explicitly after switching to the DSPy sandbox."""
+    with pytest.raises(ConfigurationError):
+        Settings.from_env(environ={name: "python:3.12-slim"})
+    settings = Settings.from_env(environ={"LLGM_MAX_CONCURRENCY": "2"})
     assert settings.max_concurrency == 2
-    assert settings.field_sources["node_repl_image"] == "environment"
-    assert "separate-test-image" not in repr(settings.redacted())
+    assert settings.field_sources["max_concurrency"] == "environment"
 
 
 def test_maintenance_settings_are_independent_of_reader_settings():
