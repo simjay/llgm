@@ -7,6 +7,7 @@ below apply from the repository root.
 
 | Guide | Purpose |
 | --- | --- |
+| [Next steps](next-steps.md) | Review the proposed conversation contract, refactor gaps and acceptance scenarios. |
 | [Code standards](standards.md) | Write useful comments, docstrings, and small interfaces. |
 | [Testing](testing.md) | Select checks, measure coverage, and configure integration gates. |
 | [Documentation conventions](documentation.md) | Place content, maintain navigation, and record changes. |
